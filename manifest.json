@@ -2,7 +2,7 @@
   "Name": "Ajazz AKP05 / Mirabox N4",
   "Description": "Device support plugin for Ajazz AKP05 (+variants)",
   "Author": "ambiso",
-  "Version": "0.8.4",
+  "Version": "0.8.5",
   "PluginUUID": "com.github.ambiso.opendeck-akp05",
   "CodePathLin": "opendeck-akp05-linux",
   "CodePathMac": "opendeck-akp05-mac",

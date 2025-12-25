@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.5] - 2025-12-25
+
+Add VSDInside N4 Pro support
+
 ## [0.8.4] - 2025-12-09
 
 Fix name and icon
