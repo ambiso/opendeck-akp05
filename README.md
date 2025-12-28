@@ -14,6 +14,7 @@ Requires OpenDeck 2.5.0 or newer
 - Ajazz AKP05E (0300:3004)
 - VSDInside N4 Pro (5548:1023)
 - Mars Gaming MSD-PRO (0B00:1003)
+- Soomfon CN003 (1500:3002)
 
 ## Platform support
 

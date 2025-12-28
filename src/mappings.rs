@@ -18,6 +18,7 @@ pub enum Kind {
     N4EN,
     N4Pro,
     MSDPro,
+    CN003,
 }
 
 pub const VSDINSIDE_VID: u16 = 0x5548;
@@ -32,22 +33,23 @@ pub const N4EN_PID: u16 = 0x1007;
 pub const MSDPRO_VID: u16 = 0x0B00;
 pub const MSDPRO_PID: u16 = 0x1003;
 
+pub const SOOMFON_VID: u16 = 0x1500;
+pub const CN003_PID: u16 = 0x3002;
 
 // Map all queries to usage page 65440 and usage id 1 for now
 pub const AKP05E_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, AJAZZ_VID, AKP05E_PID);
 pub const N4EN_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, MIRABOX_VID, N4EN_PID);
 pub const N4_PRO_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, VSDINSIDE_VID, N4_PRO_PID);
 pub const MSDPRO_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, MSDPRO_VID, MSDPRO_PID);
-
-
+pub const CN003_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, SOOMFON_VID, CN003_PID);
 
 pub const QUERIES: &[DeviceQuery] = &[
     AKP05E_QUERY,
     N4EN_QUERY,
     N4_PRO_QUERY,
     MSDPRO_QUERY,
+    CN003_QUERY,
 ];
-
 
 impl Kind {
     /// Matches devices VID+PID pairs to correct kinds
@@ -73,6 +75,10 @@ impl Kind {
                 _ => None,
             },
 
+            SOOMFON_VID => match pid {
+                CN003_PID => Some(Kind::CN003),
+                _ => None,
+            },
 
             _ => None,
         }
@@ -86,7 +92,7 @@ impl Kind {
             Self::N4EN => "Mirabox N4EN",
             Self::N4Pro => "VSDInside N4 Pro",
             Self::MSDPro => "Mars Gaming MSD-PRO (0B00:1003)",
-
+            Self::CN003 => "Soomfon CN003",
         }
         .to_string()
     }
@@ -98,7 +104,7 @@ impl Kind {
             Self::Akp05E => 3,
             Self::N4Pro => 3,
             Self::MSDPro => 3,
-
+            Self::CN003 => 3,
         }
     }
 
