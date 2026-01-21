@@ -1,6 +1,6 @@
 ![Plugin Icon](assets/icon.png)
 
-# OpenDeck Ajazz AKP05 / Mirabox N4 / Mars Gaming MSD-Pro Plugin
+# OpenDeck Ajazz AKP05 / Mirabox N4
 
 An unofficial plugin for Mirabox N4-family devices
 
