@@ -1,6 +1,6 @@
 ![Plugin Icon](assets/icon.png)
 
-# OpenDeck Ajazz AKP05 / Mirabox N4
+# OpenDeck Ajazz AKP05 / Mirabox N4 Plugin
 
 An unofficial plugin for Mirabox N4-family devices
 
