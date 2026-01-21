@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.6] - 2026-01-21
+
+Add Mars Gaming MSD Pro support
+Add Soomfon CN003 support
+
 ## [0.8.5] - 2025-12-25
 
 Add VSDInside N4 Pro support
