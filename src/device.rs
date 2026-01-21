@@ -1,7 +1,10 @@
+use std::time::Duration;
+
 use data_url::DataUrl;
 use image::load_from_memory_with_format;
 use mirajazz::{device::Device, error::MirajazzError, state::DeviceStateUpdate};
 use openaction::{OUTBOUND_EVENT_MANAGER, SetImageEvent};
+use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -60,6 +63,7 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
 
     tokio::select! {
         _ = device_events_task(&candidate) => {},
+        _ = keepalive_task(&candidate) => {},
         _ = token.cancelled() => {}
     };
 
@@ -172,6 +176,32 @@ async fn device_events_task(candidate: &CandidateDevice) -> Result<(), MirajazzE
                             .unwrap();
                     }
                 }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Sends periodic keepalives to the device to maintain connection
+async fn keepalive_task(candidate: &CandidateDevice) -> Result<(), MirajazzError> {
+    let mut interval = interval(Duration::from_secs(10));
+
+    loop {
+        interval.tick().await;
+
+        log::debug!("Sending keepalive to {}", candidate.id);
+
+        let devices_lock = DEVICES.read().await;
+        let device = match devices_lock.get(&candidate.id) {
+            Some(device) => device,
+            None => return Ok(()),
+        };
+
+        if let Err(e) = device.keep_alive().await {
+            drop(devices_lock);
+            if !handle_error(&candidate.id, e).await {
+                break;
             }
         }
     }
