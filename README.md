@@ -10,7 +10,10 @@ Requires OpenDeck 2.5.0 or newer
 
 ## Supported devices
 
-- Mirabox N4 (6603:1007)
+- Mirabox N4E (6603:1007)
+- Mirabox N4 (6602:1001)
+- Mirabox N4 Pro E (5548:1021)
+- Mirabox N4 Pro (5548:1008)
 - Ajazz AKP05E (0300:3004)
 - Ajazz AKP05E Pro (0300:3013)
 - VSDInside N4 Pro (5548:1023)
