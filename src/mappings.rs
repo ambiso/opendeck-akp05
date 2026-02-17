@@ -23,6 +23,7 @@ pub enum Kind {
     VsdN4Pro,
     MsdPro,
     Cn003,
+    SS552,
 }
 
 pub const VSDINSIDE_VID: u16 = 0x5548;
@@ -50,6 +51,9 @@ pub const MSD_PRO_PID: u16 = 0x1003;
 pub const SOOMFON_VID: u16 = 0x1500;
 pub const CN003_PID: u16 = 0x3002;
 
+pub const SS552_VID: u16 = 0x0200;
+pub const SS552_PID: u16 = 0x3001;
+
 // Map all queries to usage page 65440 and usage id 1 for now
 pub const AKP05E_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, AJAZZ_VID, AKP05E_PID);
 pub const AKP05E_PRO_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, AJAZZ_VID, AKP05E_PRO_PID);
@@ -61,6 +65,7 @@ pub const N4_PRO_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, MIRABOX_N4_PRO_
 pub const VSD_N4_PRO_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, VSDINSIDE_VID, VSD_N4_PRO_PID);
 pub const MSD_PRO_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, MARS_GAMING_VID, MSD_PRO_PID);
 pub const CN003_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, SOOMFON_VID, CN003_PID);
+pub const SS552_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, SS552_VID, SS552_PID);
 
 pub const QUERIES: &[DeviceQuery] = &[
     AKP05E_QUERY,
@@ -72,6 +77,7 @@ pub const QUERIES: &[DeviceQuery] = &[
     VSD_N4_PRO_QUERY,
     MSD_PRO_QUERY,
     CN003_QUERY,
+    SS552_QUERY,
 ];
 
 impl Kind {
@@ -112,6 +118,10 @@ impl Kind {
                 CN003_PID => Some(Kind::Cn003),
                 _ => None,
             },
+            SS552_VID => match pid {
+                SS552_PID => Some(Kind::SS552),
+                _ => None,
+            },
 
             _ => None,
         }
@@ -135,6 +145,8 @@ impl Kind {
             Self::MsdPro => "Mars Gaming MSD-Pro",
             // Soomfon devices
             Self::Cn003 => "Soomfon CN003",
+            // Redragon Devices
+            Self::SS552 => "Redragon SS552",
         }
         .to_string()
     }

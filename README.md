@@ -19,6 +19,7 @@ Requires OpenDeck 2.5.0 or newer
 - VSDInside N4 Pro (5548:1023)
 - Mars Gaming MSD-Pro (0B00:1003)
 - Soomfon CN003 (1500:3002)
+- Redragon SS552 (0200:3001)
 
 ## Platform support
 
