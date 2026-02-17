@@ -4,9 +4,17 @@
   "Author": "ambiso",
   "Version": "0.9.1",
   "PluginUUID": "com.github.ambiso.opendeck-akp05",
-  "CodePathLin": "opendeck-akp05-linux",
-  "CodePathMac": "opendeck-akp05-mac",
-  "CodePathWin": "opendeck-akp05-win.exe",
+  "CodePaths": {
+    "x86_64-pc-windows-gnu": "x86_64-pc-windows-gnu/bin/opendeck-akp05.exe",
+    "aarch64-pc-windows-gnullvm": "aarch64-pc-windows-gnullvm/bin/opendeck-akp05.exe",
+    "x86_64-apple-darwin": "x86_64-apple-darwin/bin/opendeck-akp05",
+    "aarch64-apple-darwin": "aarch64-apple-darwin/bin/opendeck-akp05",
+    "x86_64-unknown-linux-gnu": "x86_64-unknown-linux-gnu/bin/opendeck-akp05",
+    "aarch64-unknown-linux-gnu": "aarch64-unknown-linux-gnu/bin/opendeck-akp05"
+  },
+  "CodePathWin": "x86_64-pc-windows-gnu/bin/opendeck-akp05.exe",
+  "CodePathMac": "x86_64-apple-darwin/bin/opendeck-akp05",
+  "CodePathLin": "x86_64-unknown-linux-gnu/bin/opendeck-akp05",
   "Icon": "assets/icon",
   "Category": "Hardware",
   "OS": [
