@@ -640,7 +640,7 @@ dependencies = [
 
 [[package]]
 name = "opendeck-akp05"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "data-url",
  "dirs",
