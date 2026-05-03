@@ -16,6 +16,7 @@ pub const DEVICE_TYPE: u8 = 7; // StreamDeckPlus
 pub enum Kind {
     Akp05E,
     Akp05EPro,
+    Akp05CNPro,
     Akp05,
     N4E,
     N4,
@@ -34,6 +35,7 @@ pub const AJAZZ_VID: u16 = 0x0300;
 pub const AKP05E_PID: u16 = 0x3004;
 pub const AKP05E_PRO_PID: u16 = 0x3013;
 pub const AKP05_PID: u16 = 0x3006;
+pub const AKP05CN_PRO_PID: u16 = 0x3014;
 
 pub const MIRABOX_N4E_VID: u16 = 0x6603;
 pub const N4E_PID: u16 = 0x1007;
@@ -59,10 +61,12 @@ pub const SS552_PID: u16 = 0x3001;
 // Map all queries to usage page 65440 and usage id 1 for now
 pub const AKP05E_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, AJAZZ_VID, AKP05E_PID);
 pub const AKP05E_PRO_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, AJAZZ_VID, AKP05E_PRO_PID);
+pub const AKP05CN_PRO_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, AJAZZ_VID, AKP05CN_PRO_PID);
 pub const AKP05_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, AJAZZ_VID, AKP05_PID);
 pub const N4E_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, MIRABOX_N4E_VID, N4E_PID);
 pub const N4_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, MIRABOX_N4_VID, N4_PID);
-pub const N4_PRO_E_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, MIRABOX_N4_PRO_E_VID, N4_PRO_E_PID);
+pub const N4_PRO_E_QUERY: DeviceQuery =
+    DeviceQuery::new(65440, 1, MIRABOX_N4_PRO_E_VID, N4_PRO_E_PID);
 pub const N4_PRO_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, MIRABOX_N4_PRO_VID, N4_PRO_PID);
 pub const VSD_N4_PRO_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, VSDINSIDE_VID, VSD_N4_PRO_PID);
 pub const MSD_PRO_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, MARS_GAMING_VID, MSD_PRO_PID);
@@ -72,6 +76,7 @@ pub const SS552_QUERY: DeviceQuery = DeviceQuery::new(65440, 1, SS552_VID, SS552
 pub const QUERIES: &[DeviceQuery] = &[
     AKP05E_QUERY,
     AKP05E_PRO_QUERY,
+    AKP05CN_PRO_QUERY,
     AKP05_QUERY,
     N4E_QUERY,
     N4_QUERY,
@@ -92,6 +97,7 @@ impl Kind {
             AJAZZ_VID => match pid {
                 AKP05E_PID => Some(Kind::Akp05E),
                 AKP05E_PRO_PID => Some(Kind::Akp05EPro),
+                AKP05CN_PRO_PID => Some(Kind::Akp05CNPro),
                 AKP05_PID => Some(Kind::Akp05),
                 _ => None,
             },
@@ -138,6 +144,7 @@ impl Kind {
             // Ajazz devices
             Self::Akp05E => "Ajazz AKP05E",
             Self::Akp05EPro => "Ajazz AKP05E Pro",
+            Self::Akp05CNPro => "Ajazz AKP05CN Pro",
             Self::Akp05 => "Ajazz AKP05",
             // Mirabox devices
             Self::N4 => "Mirabox N4",
