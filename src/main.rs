@@ -1,4 +1,5 @@
 use device::{handle_error, handle_set_image};
+use mappings::ENCODER_COUNT;
 use mirajazz::device::Device;
 use openaction::*;
 use std::{collections::HashMap, process::exit, sync::LazyLock};
@@ -91,6 +92,34 @@ struct ActionEventHandler {}
 impl openaction::ActionEventHandler for ActionEventHandler {}
 
 async fn shutdown() {
+    // Turn the hardware off before tearing the tasks down: otherwise the
+    // device keeps displaying whatever it was last sent, for as long as USB
+    // stays powered - which on many boards means until the PSU is switched
+    // off.
+    //
+    // The encoder LEDs are a separate subsystem from the displays, so
+    // shutdown() alone is not enough: it clears the screens but leaves the
+    // rings lit. Clear them first — but only if we lit them in the first
+    // place, since not every supported device has LED-equipped encoders.
+    let had_leds = matches!(
+        led_config::load().mode,
+        Some(led_config::LedMode::Static { .. })
+    );
+
+    for (id, device) in DEVICES.read().await.iter() {
+        if had_leds {
+            if let Err(error) = device.set_led_colors(&[[0, 0, 0]; ENCODER_COUNT]).await {
+                log::warn!("Failed to clear LED colors on {id}: {error}");
+            }
+            if let Err(error) = device.set_led_brightness(0).await {
+                log::warn!("Failed to zero LED brightness on {id}: {error}");
+            }
+        }
+        if let Err(error) = device.shutdown().await {
+            log::warn!("Failed to shut down device {id}: {error}");
+        }
+    }
+
     let tokens = TOKENS.write().await;
 
     for (_, token) in tokens.iter() {
