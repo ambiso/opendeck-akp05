@@ -197,6 +197,12 @@ async fn keepalive_task(candidate: &CandidateDevice) -> Result<(), MirajazzError
     loop {
         interval.tick().await;
 
+        // While a device is asleep, the periodic CONNECT would wake its panels
+        // back up, so skip it until something sets a non-zero brightness again.
+        if crate::SLEEPING.read().await.contains(&candidate.id) {
+            continue;
+        }
+
         log::debug!("Sending keepalive to {}", candidate.id);
 
         let devices_lock = DEVICES.read().await;
