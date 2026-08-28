@@ -104,6 +104,7 @@ pub async fn handle_error(id: &String, err: MirajazzError) -> bool {
 
     log::info!("Removing device {} from the list", id);
     DEVICES.write().await.remove(id);
+    crate::SLEEPING.write().await.remove(id);
 
     log::info!("Finished clean-up for {}", id);
 
