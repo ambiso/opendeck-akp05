@@ -1,7 +1,11 @@
 use device::{handle_error, handle_set_image};
 use mirajazz::device::Device;
 use openaction::*;
-use std::{collections::HashMap, process::exit, sync::LazyLock};
+use std::{
+    collections::{HashMap, HashSet},
+    process::exit,
+    sync::LazyLock,
+};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use watcher::watcher_task;
@@ -21,6 +25,10 @@ pub static DEVICES: LazyLock<RwLock<HashMap<String, Device>>> =
 pub static TOKENS: LazyLock<RwLock<HashMap<String, CancellationToken>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 pub static TRACKER: LazyLock<Mutex<TaskTracker>> = LazyLock::new(|| Mutex::new(TaskTracker::new()));
+/// Devices currently asleep. Keepalive is suppressed for these, so that the
+/// periodic CONNECT does not wake the panels back up.
+pub static SLEEPING: LazyLock<RwLock<HashSet<String>>> =
+    LazyLock::new(|| RwLock::new(HashSet::new()));
 
 struct GlobalEventHandler {}
 impl openaction::GlobalEventHandler for GlobalEventHandler {
@@ -75,11 +83,20 @@ impl openaction::GlobalEventHandler for GlobalEventHandler {
         let id = event.device.clone();
 
         if let Some(device) = DEVICES.read().await.get(&event.device) {
-            device
-                .set_brightness(event.brightness)
-                .await
-                .map_err(async |err| handle_error(&id, err).await)
-                .ok();
+            // OpenDeck asks a device to sleep by setting its brightness to 0
+            // (see device_sleep::sleep_device). On this hardware the LIG command's
+            // lowest step is still clearly lit, so honouring it literally leaves the
+            // panels on. Use the dedicated sleep command instead, which is what the
+            // vendor software does, and let any non-zero value wake the device.
+            let result = if event.brightness == 0 {
+                SLEEPING.write().await.insert(id.clone());
+                device.sleep().await
+            } else {
+                SLEEPING.write().await.remove(&id);
+                device.set_brightness(event.brightness).await
+            };
+
+            result.map_err(async |err| handle_error(&id, err).await).ok();
         } else {
             log::error!("Received event for unknown device: {}", event.device);
         }

@@ -115,6 +115,7 @@ pub async fn handle_error(id: &String, err: MirajazzError) -> bool {
 
     log::info!("Removing device {} from the list", id);
     DEVICES.write().await.remove(id);
+    crate::SLEEPING.write().await.remove(id);
 
     log::info!("Finished clean-up for {}", id);
 
@@ -207,6 +208,12 @@ async fn keepalive_task(candidate: &CandidateDevice) -> Result<(), MirajazzError
 
     loop {
         interval.tick().await;
+
+        // While a device is asleep, the periodic CONNECT would wake its panels
+        // back up, so skip it until something sets a non-zero brightness again.
+        if crate::SLEEPING.read().await.contains(&candidate.id) {
+            continue;
+        }
 
         log::debug!("Sending keepalive to {}", candidate.id);
 
