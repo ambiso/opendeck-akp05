@@ -1,6 +1,9 @@
 use device::{handle_error, handle_set_image};
 use managed_device::ManagedDevice;
-use openaction::*;
+use openaction::{
+    OpenActionResult, async_trait,
+    global_events::{SetBrightnessEvent, SetImageEvent, set_global_event_handler},
+};
 use std::{
     collections::HashMap,
     process::exit,
@@ -28,11 +31,9 @@ pub static TOKENS: LazyLock<RwLock<HashMap<String, CancellationToken>>> =
 pub static TRACKER: LazyLock<Mutex<TaskTracker>> = LazyLock::new(|| Mutex::new(TaskTracker::new()));
 
 struct GlobalEventHandler {}
-impl openaction::GlobalEventHandler for GlobalEventHandler {
-    async fn plugin_ready(
-        &self,
-        _outbound: &mut openaction::OutboundEventManager,
-    ) -> EventHandlerResult {
+#[async_trait]
+impl openaction::global_events::GlobalEventHandler for GlobalEventHandler {
+    async fn plugin_ready(&self) -> OpenActionResult<()> {
         let tracker = TRACKER.lock().await.clone();
 
         let token = CancellationToken::new();
@@ -48,11 +49,7 @@ impl openaction::GlobalEventHandler for GlobalEventHandler {
         Ok(())
     }
 
-    async fn set_image(
-        &self,
-        event: SetImageEvent,
-        _outbound: &mut OutboundEventManager,
-    ) -> EventHandlerResult {
+    async fn device_plugin_set_image(&self, event: SetImageEvent) -> OpenActionResult<()> {
         log::debug!("Asked to set image");
         log::trace!("Set image event: {:#?}", event);
 
@@ -60,11 +57,12 @@ impl openaction::GlobalEventHandler for GlobalEventHandler {
 
         let device = DEVICES.read().await.get(&event.device).cloned();
         if let Some(device) = device {
-            device
+            if let Err(err) = device
                 .with_awake_device(async |device| handle_set_image(device, event).await)
                 .await
-                .map_err(async |err| handle_error(&id, err).await)
-                .ok();
+            {
+                handle_error(&id, err).await;
+            }
         } else {
             log::error!("Received event for unknown device: {}", event.device);
         }
@@ -72,22 +70,19 @@ impl openaction::GlobalEventHandler for GlobalEventHandler {
         Ok(())
     }
 
-    async fn set_brightness(
+    async fn device_plugin_set_brightness(
         &self,
         event: SetBrightnessEvent,
-        _outbound: &mut OutboundEventManager,
-    ) -> EventHandlerResult {
+    ) -> OpenActionResult<()> {
         log::debug!("Asked to set brightness: {:#?}", event);
 
         let id = event.device.clone();
 
         let device = DEVICES.read().await.get(&event.device).cloned();
         if let Some(device) = device {
-            device
-                .set_brightness(event.brightness)
-                .await
-                .map_err(async |err| handle_error(&id, err).await)
-                .ok();
+            if let Err(err) = device.set_brightness(event.brightness).await {
+                handle_error(&id, err).await;
+            }
         } else {
             log::error!("Received event for unknown device: {}", event.device);
         }
@@ -95,9 +90,6 @@ impl openaction::GlobalEventHandler for GlobalEventHandler {
         Ok(())
     }
 }
-
-struct ActionEventHandler {}
-impl openaction::ActionEventHandler for ActionEventHandler {}
 
 async fn shutdown() {
     let tokens = TOKENS.write().await;
@@ -108,7 +100,9 @@ async fn shutdown() {
 }
 
 async fn connect() {
-    if let Err(error) = init_plugin(GlobalEventHandler {}, ActionEventHandler {}).await {
+    static HANDLER: GlobalEventHandler = GlobalEventHandler {};
+    set_global_event_handler(&HANDLER);
+    if let Err(error) = openaction::run(std::env::args().collect()).await {
         log::error!("Failed to initialize plugin: {}", error);
         exit(1);
     }

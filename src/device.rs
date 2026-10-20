@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use data_url::DataUrl;
 use image::{DynamicImage, GenericImageView, load_from_memory_with_format};
 use mirajazz::{device::Device, error::MirajazzError, state::DeviceStateUpdate};
-use openaction::{OUTBOUND_EVENT_MANAGER, SetImageEvent};
+use openaction::{device_plugin, global_events::SetImageEvent};
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
 
@@ -65,19 +65,16 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
     };
 
     log::info!("Registering device {}", candidate.id);
-    if let Some(outbound) = OUTBOUND_EVENT_MANAGER.lock().await.as_mut() {
-        outbound
-            .register_device(
-                candidate.id.clone(),
-                candidate.kind.human_name(),
-                ROW_COUNT as u8,
-                COL_COUNT as u8,
-                ENCODER_COUNT as u8,
-                DEVICE_TYPE,
-            )
-            .await
-            .unwrap();
-    }
+    device_plugin::register_device(
+        candidate.id.clone(),
+        candidate.kind.human_name(),
+        ROW_COUNT as u8,
+        COL_COUNT as u8,
+        ENCODER_COUNT as u8,
+        DEVICE_TYPE,
+    )
+    .await
+    .unwrap();
 
     let device = Arc::new(ManagedDevice::new(device));
     DEVICES
@@ -108,9 +105,7 @@ pub async fn handle_error(id: &String, err: MirajazzError) -> bool {
     }
 
     log::info!("Deregistering device {}", id);
-    if let Some(outbound) = OUTBOUND_EVENT_MANAGER.lock().await.as_mut() {
-        outbound.deregister_device(id.clone()).await.unwrap();
-    }
+    device_plugin::unregister_device(id.clone()).await.unwrap();
 
     log::info!("Cancelling tasks for device {}", id);
     if let Some(token) = TOKENS.read().await.get(id) {
@@ -180,22 +175,21 @@ async fn device_events_task(candidate: &CandidateDevice) -> Result<(), MirajazzE
 
             let id = candidate.id.clone();
 
-            if let Some(outbound) = OUTBOUND_EVENT_MANAGER.lock().await.as_mut() {
-                match update {
-                    DeviceStateUpdate::ButtonDown(key) => outbound.key_down(id, key).await.unwrap(),
-                    DeviceStateUpdate::ButtonUp(key) => outbound.key_up(id, key).await.unwrap(),
-                    DeviceStateUpdate::EncoderDown(encoder) => {
-                        outbound.encoder_down(id, encoder).await.unwrap();
-                    }
-                    DeviceStateUpdate::EncoderUp(encoder) => {
-                        outbound.encoder_up(id, encoder).await.unwrap();
-                    }
-                    DeviceStateUpdate::EncoderTwist(encoder, val) => {
-                        outbound
-                            .encoder_change(id, encoder, val as i16)
-                            .await
-                            .unwrap();
-                    }
+            match update {
+                DeviceStateUpdate::ButtonDown(key) => {
+                    device_plugin::key_down(id, key).await.unwrap()
+                }
+                DeviceStateUpdate::ButtonUp(key) => device_plugin::key_up(id, key).await.unwrap(),
+                DeviceStateUpdate::EncoderDown(encoder) => {
+                    device_plugin::encoder_down(id, encoder).await.unwrap();
+                }
+                DeviceStateUpdate::EncoderUp(encoder) => {
+                    device_plugin::encoder_up(id, encoder).await.unwrap();
+                }
+                DeviceStateUpdate::EncoderTwist(encoder, val) => {
+                    device_plugin::encoder_change(id, encoder, val as i16)
+                        .await
+                        .unwrap();
                 }
             }
         }

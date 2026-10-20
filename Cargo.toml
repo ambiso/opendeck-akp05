@@ -2,24 +2,26 @@
 name = "opendeck-akp05"
 version = "0.11.1"
 edition = "2024"
+rust-version = "1.88"
 license = "GPL-3.0"
 
 [dependencies]
-data-url = "0.3.1"
-dirs = "5"
-env_logger = "0.11"
-futures-lite = "2.6.0"
-image = { version = "0.25.6", default-features = false, features = [
+data-url = "0.3.2"
+dirs = "7"
+env_logger = "0.11.11"
+futures-lite = "2.6.1"
+image = { version = "0.25.10", default-features = false, features = [
   "bmp",
   "jpeg",
 ] }
-log = "0.4.27"
+log = "0.4.34"
 mirajazz = "0.16.2"
-openaction = "1.1.5"
-serde = { version = "1", features = ["derive"] }
-tokio = { version = "1.44.2", features = ["full"] }
-tokio-util = { version = "0.7.15", features = ["full"] }
-toml = "0.8"
+openaction = "2.8.0"
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.54.0", features = ["full"] }
+tokio-util = { version = "0.7.20", features = ["full"] }
+toml = "1.1.8"
 
 [patch.crates-io]
+# N4 Pro vibration control is not available in upstream mirajazz 0.16.2.
 mirajazz = { git = "https://github.com/ambiso/mirajazz.git" }

@@ -96,7 +96,7 @@ Read [this wiki page](https://github.com/4ndv/opendeck-akp03/wiki/Adding-support
 You'll need:
 
 - A Linux OS of some sort
-- Rust 1.87 and up with `x86_64-unknown-linux-gnu` and `x86_64-pc-windows-gnu` targets installed
+- Rust 1.88 and up with `x86_64-unknown-linux-gnu` and `x86_64-pc-windows-gnu` targets installed
 - gcc with Windows support
 - Docker
 - [just](https://just.systems)
