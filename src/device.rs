@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use data_url::DataUrl;
 use image::{DynamicImage, GenericImageView, load_from_memory_with_format};
@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     DEVICES, TOKENS, config, led_config,
+    managed_device::ManagedDevice,
     mappings::{
         COL_COUNT, CandidateDevice, DEVICE_TYPE, ENCODER_COUNT, KEY_COUNT, Kind, ROW_COUNT,
     },
@@ -78,7 +79,11 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
             .unwrap();
     }
 
-    DEVICES.write().await.insert(candidate.id.clone(), device);
+    let device = Arc::new(ManagedDevice::new(device));
+    DEVICES
+        .write()
+        .await
+        .insert(candidate.id.clone(), device.clone());
 
     tokio::select! {
         _ = device_events_task(&candidate) => {},
@@ -88,9 +93,7 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
 
     log::info!("Shutting down device {:?}", candidate);
 
-    if let Some(device) = DEVICES.read().await.get(&candidate.id) {
-        device.shutdown().await.ok();
-    }
+    device.shutdown().await.ok();
 
     log::info!("Device task finished for {:?}", candidate);
 }
@@ -116,7 +119,6 @@ pub async fn handle_error(id: &String, err: MirajazzError) -> bool {
 
     log::info!("Removing device {} from the list", id);
     DEVICES.write().await.remove(id);
-    crate::SLEEPING.write().await.remove(id);
 
     log::info!("Finished clean-up for {}", id);
 
@@ -149,12 +151,11 @@ pub async fn connect(candidate: &CandidateDevice) -> Result<Device, MirajazzErro
 async fn device_events_task(candidate: &CandidateDevice) -> Result<(), MirajazzError> {
     log::info!("Connecting to {} for incoming events", candidate.id);
 
-    let devices_lock = DEVICES.read().await;
-    let reader = match devices_lock.get(&candidate.id) {
-        Some(device) => device.get_reader(crate::inputs::process_input),
+    let device = DEVICES.read().await.get(&candidate.id).cloned();
+    let reader = match device {
+        Some(device) => device.get_reader().await,
         None => return Ok(()),
     };
-    drop(devices_lock);
 
     log::info!("Connected to {} for incoming events", candidate.id);
 
@@ -210,25 +211,22 @@ async fn keepalive_task(candidate: &CandidateDevice) -> Result<(), MirajazzError
     loop {
         interval.tick().await;
 
-        // While a device is asleep, the periodic CONNECT would wake its panels
-        // back up, so skip it until something sets a non-zero brightness again.
-        if crate::SLEEPING.read().await.contains(&candidate.id) {
-            continue;
-        }
-
         log::debug!("Sending keepalive to {}", candidate.id);
 
-        let devices_lock = DEVICES.read().await;
-        let device = match devices_lock.get(&candidate.id) {
+        let device = DEVICES.read().await.get(&candidate.id).cloned();
+        let device = match device {
             Some(device) => device,
             None => return Ok(()),
         };
 
-        if let Err(e) = device.keep_alive().await {
-            drop(devices_lock);
-            if !handle_error(&candidate.id, e).await {
-                break;
-            }
+        let Err(e) = device
+            .with_awake_device(async |device| device.keep_alive().await)
+            .await
+        else {
+            continue;
+        };
+        if !handle_error(&candidate.id, e).await {
+            break;
         }
     }
 
