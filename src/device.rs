@@ -28,8 +28,9 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
 
         let cfg = config::load();
         log::info!("Applying config: {:?}", cfg);
-        if let Some(led_config::LedMode::Static { colors: _ }) = cfg.leds.mode {
+        if let Some(led_config::LedMode::Static { colors }) = cfg.leds.mode {
             device.set_led_brightness(cfg.leds.brightness).await?;
+            device.set_led_colors(&colors).await?;
         }
 
         if let Some(enabled) = cfg.vibration {
