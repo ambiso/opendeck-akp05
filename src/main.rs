@@ -1,16 +1,20 @@
-use device::{handle_error, handle_set_image};
+use device::handle_set_image;
 use managed_device::ManagedDevice;
 use openaction::{
     OpenActionResult, async_trait,
-    global_events::{SetBrightnessEvent, SetImageEvent, set_global_event_handler},
+    global_events::{
+        SetBrightnessEvent, SetImageEvent, SystemDidWakeUpEvent, set_global_event_handler,
+    },
 };
 use std::{
     collections::HashMap,
-    process::exit,
     sync::{Arc, LazyLock},
 };
-use tokio::sync::{Mutex, RwLock};
-use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tokio::{
+    sync::{Mutex, Notify, RwLock},
+    task::JoinHandle,
+};
+use tokio_util::sync::CancellationToken;
 use watcher::watcher_task;
 
 #[cfg(not(target_os = "windows"))]
@@ -26,23 +30,33 @@ mod watcher;
 
 pub static DEVICES: LazyLock<RwLock<HashMap<String, Arc<ManagedDevice>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
-pub static TOKENS: LazyLock<RwLock<HashMap<String, CancellationToken>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
-pub static TRACKER: LazyLock<Mutex<TaskTracker>> = LazyLock::new(|| Mutex::new(TaskTracker::new()));
+static HANDLER: LazyLock<GlobalEventHandler> = LazyLock::new(|| GlobalEventHandler {
+    shutdown: CancellationToken::new(),
+    resume: Arc::new(Notify::new()),
+    watcher: Mutex::new(None),
+});
 
-struct GlobalEventHandler {}
+struct GlobalEventHandler {
+    shutdown: CancellationToken,
+    resume: Arc<Notify>,
+    watcher: Mutex<Option<JoinHandle<()>>>,
+}
 #[async_trait]
 impl openaction::global_events::GlobalEventHandler for GlobalEventHandler {
+    async fn system_did_wake_up(&self, _event: SystemDidWakeUpEvent) -> OpenActionResult<()> {
+        log::info!("System resumed; scheduling USB device rediscovery");
+        self.resume.notify_one();
+        Ok(())
+    }
+
     async fn plugin_ready(&self) -> OpenActionResult<()> {
-        let tracker = TRACKER.lock().await.clone();
-
-        let token = CancellationToken::new();
-        tracker.spawn(watcher_task(token.clone()));
-
-        TOKENS
-            .write()
-            .await
-            .insert("_watcher_task".to_string(), token);
+        let mut watcher = self.watcher.lock().await;
+        if watcher.is_none() {
+            *watcher = Some(tokio::spawn(watcher_task(
+                self.shutdown.clone(),
+                self.resume.clone(),
+            )));
+        }
 
         log::info!("Plugin initialized");
 
@@ -61,7 +75,7 @@ impl openaction::global_events::GlobalEventHandler for GlobalEventHandler {
                 .with_awake_device(async |device| handle_set_image(device, event).await)
                 .await
             {
-                handle_error(&id, err).await;
+                device.handle_error(&id, err);
             }
         } else {
             log::error!("Received event for unknown device: {}", event.device);
@@ -81,7 +95,7 @@ impl openaction::global_events::GlobalEventHandler for GlobalEventHandler {
         let device = DEVICES.read().await.get(&event.device).cloned();
         if let Some(device) = device {
             if let Err(err) = device.set_brightness(event.brightness).await {
-                handle_error(&id, err).await;
+                device.handle_error(&id, err);
             }
         } else {
             log::error!("Received event for unknown device: {}", event.device);
@@ -92,20 +106,17 @@ impl openaction::global_events::GlobalEventHandler for GlobalEventHandler {
 }
 
 async fn shutdown() {
-    let tokens = TOKENS.write().await;
-
-    for token in tokens.values() {
-        token.cancel();
+    HANDLER.shutdown.cancel();
+    if let Some(watcher) = HANDLER.watcher.lock().await.take()
+        && let Err(err) = watcher.await
+    {
+        log::error!("Device watcher failed: {err}");
     }
 }
 
-async fn connect() {
-    static HANDLER: GlobalEventHandler = GlobalEventHandler {};
-    set_global_event_handler(&HANDLER);
-    if let Err(error) = openaction::run(std::env::args().collect()).await {
-        log::error!("Failed to initialize plugin: {}", error);
-        exit(1);
-    }
+async fn connect() -> OpenActionResult<()> {
+    set_global_event_handler(&*HANDLER);
+    openaction::run(std::env::args().collect()).await
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -130,23 +141,16 @@ async fn sigterm() -> Result<(), Box<dyn std::error::Error>> {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    tokio::select! {
-        _ = connect() => {},
-        _ = sigterm() => {},
-    }
+    let result = tokio::select! {
+        result = connect() => result,
+        _ = sigterm() => Ok(()),
+    };
 
     log::info!("Shutting down");
 
     shutdown().await;
 
-    let tracker = TRACKER.lock().await.clone();
-
-    log::info!("Waiting for tasks to finish");
-
-    tracker.close();
-    tracker.wait().await;
-
     log::info!("Tasks are finished, exiting now");
 
-    Ok(())
+    result.map_err(Into::into)
 }

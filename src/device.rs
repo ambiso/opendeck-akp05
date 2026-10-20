@@ -4,11 +4,11 @@ use data_url::DataUrl;
 use image::{DynamicImage, GenericImageView, load_from_memory_with_format};
 use mirajazz::{device::Device, error::MirajazzError, state::DeviceStateUpdate};
 use openaction::{device_plugin, global_events::SetImageEvent};
-use tokio::time::interval;
+use tokio::time::{interval, timeout};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    DEVICES, TOKENS, config, led_config,
+    DEVICES, config, led_config,
     managed_device::ManagedDevice,
     mappings::{
         COL_COUNT, CandidateDevice, DEVICE_TYPE, ENCODER_COUNT, KEY_COUNT, Kind, ROW_COUNT,
@@ -19,8 +19,7 @@ use crate::{
 pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
     log::info!("Running device task for {:?}", candidate);
 
-    // Wrap in a closure so we can use `?` operator
-    let device = async {
+    let initialize = async {
         let device = connect(&candidate).await?;
 
         device.set_brightness(50).await?;
@@ -47,77 +46,52 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
         }
 
         Ok(device)
-    }
-    .await;
-
-    let device: Device = match device {
+    };
+    let device: Result<Device, MirajazzError> = tokio::select! {
+        biased;
+        _ = token.cancelled() => return,
+        result = initialize => result,
+    };
+    let device = match device {
         Ok(device) => device,
         Err(err) => {
-            handle_error(&candidate.id, err).await;
-
-            log::error!(
-                "Had error during device init, finishing device task: {:?}",
-                candidate
-            );
-
+            log::error!("Device {} initialization failed: {err}", candidate.id);
             return;
         }
     };
 
-    log::info!("Registering device {}", candidate.id);
-    device_plugin::register_device(
-        candidate.id.clone(),
-        candidate.kind.human_name(),
-        ROW_COUNT as u8,
-        COL_COUNT as u8,
-        ENCODER_COUNT as u8,
-        DEVICE_TYPE,
-    )
-    .await
-    .unwrap();
-
-    let device = Arc::new(ManagedDevice::new(device));
-    DEVICES
-        .write()
-        .await
-        .insert(candidate.id.clone(), device.clone());
-
+    let device = Arc::new(ManagedDevice::new(device, token.clone()));
     tokio::select! {
-        _ = device_events_task(&candidate) => {},
-        _ = keepalive_task(&candidate) => {},
-        _ = token.cancelled() => {}
+        biased;
+        _ = token.cancelled() => {},
+        _ = async {
+            // Publish before registering: OpenDeck may immediately send images.
+            DEVICES.write().await.insert(candidate.id.clone(), device.clone());
+            if let Err(err) = device_plugin::register_device(
+                candidate.id.clone(), candidate.kind.human_name(),
+                ROW_COUNT as u8, COL_COUNT as u8, ENCODER_COUNT as u8, DEVICE_TYPE,
+            ).await {
+                log::error!("Device {} registration failed: {err}", candidate.id);
+                return;
+            }
+            tokio::select! {
+                _ = device_events_task(&candidate, &device) => {},
+                _ = keepalive_task(&candidate, &device) => {},
+            }
+        } => {},
     };
 
+    token.cancel();
     log::info!("Shutting down device {:?}", candidate);
 
-    device.shutdown().await.ok();
+    if timeout(Duration::from_secs(2), device.shutdown())
+        .await
+        .is_err()
+    {
+        log::warn!("Device {} shutdown timed out", candidate.id);
+    }
 
     log::info!("Device task finished for {:?}", candidate);
-}
-
-/// Handles errors, returning true if should continue, returning false if an error is fatal
-pub async fn handle_error(id: &String, err: MirajazzError) -> bool {
-    log::error!("Device {} error: {}", id, err);
-
-    // Some errors are not critical and can be ignored without sending disconnected event
-    if matches!(err, MirajazzError::ImageError(_) | MirajazzError::BadData) {
-        return true;
-    }
-
-    log::info!("Deregistering device {}", id);
-    device_plugin::unregister_device(id.clone()).await.unwrap();
-
-    log::info!("Cancelling tasks for device {}", id);
-    if let Some(token) = TOKENS.read().await.get(id) {
-        token.cancel();
-    }
-
-    log::info!("Removing device {} from the list", id);
-    DEVICES.write().await.remove(id);
-
-    log::info!("Finished clean-up for {}", id);
-
-    false
 }
 
 pub async fn connect(candidate: &CandidateDevice) -> Result<Device, MirajazzError> {
@@ -143,14 +117,13 @@ pub async fn connect(candidate: &CandidateDevice) -> Result<Device, MirajazzErro
 }
 
 /// Handles events from device to OpenDeck
-async fn device_events_task(candidate: &CandidateDevice) -> Result<(), MirajazzError> {
+async fn device_events_task(
+    candidate: &CandidateDevice,
+    device: &ManagedDevice,
+) -> Result<(), MirajazzError> {
     log::info!("Connecting to {} for incoming events", candidate.id);
 
-    let device = DEVICES.read().await.get(&candidate.id).cloned();
-    let reader = match device {
-        Some(device) => device.get_reader().await,
-        None => return Ok(()),
-    };
+    let reader = device.get_reader();
 
     log::info!("Connected to {} for incoming events", candidate.id);
 
@@ -162,7 +135,7 @@ async fn device_events_task(candidate: &CandidateDevice) -> Result<(), MirajazzE
         let updates = match reader.read(None).await {
             Ok(updates) => updates,
             Err(e) => {
-                if !handle_error(&candidate.id, e).await {
+                if !device.handle_error(&candidate.id, e) {
                     break;
                 }
 
@@ -199,7 +172,10 @@ async fn device_events_task(candidate: &CandidateDevice) -> Result<(), MirajazzE
 }
 
 /// Sends periodic keepalives to the device to maintain connection
-async fn keepalive_task(candidate: &CandidateDevice) -> Result<(), MirajazzError> {
+async fn keepalive_task(
+    candidate: &CandidateDevice,
+    device: &ManagedDevice,
+) -> Result<(), MirajazzError> {
     let mut interval = interval(Duration::from_secs(10));
 
     loop {
@@ -207,19 +183,13 @@ async fn keepalive_task(candidate: &CandidateDevice) -> Result<(), MirajazzError
 
         log::debug!("Sending keepalive to {}", candidate.id);
 
-        let device = DEVICES.read().await.get(&candidate.id).cloned();
-        let device = match device {
-            Some(device) => device,
-            None => return Ok(()),
-        };
-
         let Err(e) = device
             .with_awake_device(async |device| device.keep_alive().await)
             .await
         else {
             continue;
         };
-        if !handle_error(&candidate.id, e).await {
+        if !device.handle_error(&candidate.id, e) {
             break;
         }
     }
