@@ -23,7 +23,7 @@ jobs:
             platform: macos
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
       - name: Native build, tests, formatting, lint, and audit
         run: nix flake check --print-build-logs
@@ -41,7 +41,7 @@ jobs:
           nix build .#macos-universal --out-link result-macos --print-build-logs
           mkdir -p binaries
           cp result-macos/bin/opendeck-akp05 binaries/opendeck-akp05-mac
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: binaries-${{ matrix.platform }}
           path: binaries/
@@ -53,22 +53,22 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: binaries-*
           path: binaries
           merge-multiple: true
       - name: Package all platforms
         run: nix run .#package-plugin -- binaries opendeck-akp05.plugin.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: opendeck-akp05.plugin
           path: opendeck-akp05.plugin.zip
           if-no-files-found: error
       - name: Release
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: opendeck-akp05.plugin.zip
