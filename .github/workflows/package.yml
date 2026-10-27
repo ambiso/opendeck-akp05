@@ -3,32 +3,72 @@ name: Package
 on:
   push:
     branches: ["main"]
-    tags:
-      - "*"
+    tags: ["*"]
   pull_request:
     branches: ["main"]
+  workflow_dispatch:
 
-env:
-  CARGO_TERM_COLOR: always
+permissions:
+  contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux
+          - runner: macos-15
+            platform: macos
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install dependencies
-        run: cargo install just && rustup target add x86_64-pc-windows-gnu && sudo apt-get update -y && sudo apt-get install -y gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
-      - name: Package
-        run: just package
-      - name: Run tests
-        run: cargo test --verbose
+      - uses: cachix/install-nix-action@v31
+      - name: Native build, tests, formatting, lint, and audit
+        run: nix flake check --print-build-logs
+      - name: Build static Linux and Windows executables
+        if: matrix.platform == 'linux'
+        run: |
+          nix build .#linux-static --out-link result-linux --print-build-logs
+          nix build .#windows --out-link result-windows --print-build-logs
+          mkdir -p binaries
+          cp result-linux/bin/opendeck-akp05 binaries/opendeck-akp05-linux
+          cp result-windows/bin/opendeck-akp05.exe binaries/opendeck-akp05-win.exe
+      - name: Build universal macOS executable
+        if: matrix.platform == 'macos'
+        run: |
+          nix build .#macos-universal --out-link result-macos --print-build-logs
+          mkdir -p binaries
+          cp result-macos/bin/opendeck-akp05 binaries/opendeck-akp05-mac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.platform }}
+          path: binaries/
+          if-no-files-found: error
+
+  package:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          path: binaries
+          merge-multiple: true
+      - name: Package all platforms
+        run: nix run .#package-plugin -- binaries opendeck-akp05.plugin.zip
       - uses: actions/upload-artifact@v4
         with:
           name: opendeck-akp05.plugin
-          path: build/
+          path: opendeck-akp05.plugin.zip
+          if-no-files-found: error
       - name: Release
-        uses: softprops/action-gh-release@v2
         if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
         with:
-          files: build/opendeck-akp05.plugin.zip
+          files: opendeck-akp05.plugin.zip

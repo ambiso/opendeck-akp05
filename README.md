@@ -93,40 +93,43 @@ Read [this wiki page](https://github.com/4ndv/opendeck-akp03/wiki/Adding-support
 
 ### Prerequisites
 
-You'll need:
-
-- A Linux OS of some sort
-- Rust 1.88 and up with `x86_64-unknown-linux-gnu` and `x86_64-pc-windows-gnu` targets installed
-- gcc with Windows support
-- Docker
-- [just](https://just.systems)
-
-On Arch Linux:
+Install Nix with flakes enabled. The pinned flake supplies Rust (1.88 or newer),
+linkers, test tools, and packaging tools; Docker and manually installed cross
+compilers are not required.
 
 ```sh
-sudo pacman -S just mingw-w64-gcc mingw-w64-binutils
+nix develop
+nix flake check --print-build-logs
 ```
 
-Adding rust targets:
+### Release executables
+
+On Linux:
 
 ```sh
-rustup target add x86_64-pc-windows-gnu
-rustup target add x86_64-unknown-linux-gnu
+just build-linux # Fully static musl binary; no host glibc or Nix store required
+just build-win   # Cross-compiled x86-64 Windows executable
 ```
 
-### Preparing environment
+On macOS:
 
 ```sh
-$ just prepare
+just build-mac   # Universal binary containing both x86-64 and arm64
 ```
 
-This will build docker image for macOS crosscompilation
+These commands put executables in `build/binaries/`. To assemble a release,
+collect all three executables there and run `just package`. The result is
+`build/opendeck-akp05.plugin.zip`; packaging rejects missing platforms and an
+existing output file. Remove or rename an old ZIP before packaging again.
 
-### Building a release package
+CI uses Nix for every build and check, builds Linux and Windows on a Linux
+runner and macOS on a macOS runner, then combines the executables into one ZIP.
+Tag pushes publish that ZIP as a GitHub release.
 
-```sh
-$ just package
-```
+The sandboxed audit uses the advisory database pinned in `flake.lock` and skips
+yanked-crate checks, which require registry network access. Update the database
+with `nix flake update advisory-db`. The exception lives only in the Nix audit
+derivation; ordinary `cargo audit` retains its default yanked-crate checks.
 
 ## Acknowledgments
 
