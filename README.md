@@ -112,7 +112,7 @@ just build-win   # Cross-compiled x86-64 Windows executable
 just build-mac   # Cross-compiled universal macOS executable (Intel + ARM)
 ```
 
-`just build-mac` also works natively on macOS:
+`just build-mac` also works on macOS using the same pinned SDK/Zig toolchain:
 
 ```sh
 just build-mac   # Universal binary containing both x86-64 and arm64
@@ -127,8 +127,8 @@ The Linux-to-macOS build uses Nix-provided cargo-zigbuild and a hash-pinned
 macOS 11.3 SDK, matching the previous Docker toolchain. It compiles and checks
 both binary architectures locally; executing macOS binaries still requires macOS.
 
-CI uses Nix for every build and check, builds Linux and Windows on a Linux
-runner and macOS on a macOS runner, then combines the executables into one ZIP.
+CI uses Nix for every build and check, cross-compiles all release executables
+on a Linux runner, then combines them into one ZIP.
 Tag pushes publish that ZIP as a GitHub release.
 
 The sandboxed audit uses the advisory database pinned in `flake.lock` and skips

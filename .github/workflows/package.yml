@@ -13,37 +13,24 @@ permissions:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            platform: linux
-          - runner: macos-15
-            platform: macos
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
       - name: Native build, tests, formatting, lint, and audit
         run: nix flake check --print-build-logs
-      - name: Build static Linux and Windows executables
-        if: matrix.platform == 'linux'
+      - name: Build release executables for all platforms
         run: |
           nix build .#linux-static --out-link result-linux --print-build-logs
           nix build .#windows --out-link result-windows --print-build-logs
+          nix build .#macos-universal --out-link result-macos --print-build-logs
           mkdir -p binaries
           cp result-linux/bin/opendeck-akp05 binaries/opendeck-akp05-linux
           cp result-windows/bin/opendeck-akp05.exe binaries/opendeck-akp05-win.exe
-      - name: Build universal macOS executable
-        if: matrix.platform == 'macos'
-        run: |
-          nix build .#macos-universal --out-link result-macos --print-build-logs
-          mkdir -p binaries
           cp result-macos/bin/opendeck-akp05 binaries/opendeck-akp05-mac
       - uses: actions/upload-artifact@v7
         with:
-          name: binaries-${{ matrix.platform }}
+          name: binaries
           path: binaries/
           if-no-files-found: error
 
@@ -57,9 +44,8 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - uses: actions/download-artifact@v8
         with:
-          pattern: binaries-*
+          name: binaries
           path: binaries
-          merge-multiple: true
       - name: Package all platforms
         run: nix run .#package-plugin -- binaries opendeck-akp05.plugin.zip
       - uses: actions/upload-artifact@v7

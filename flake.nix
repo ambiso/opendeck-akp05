@@ -111,27 +111,22 @@
         macZigbuild = pkgs.callPackage ./nix/cargo-zigbuild.nix { };
         macSlice =
           arch:
-          if pkgs.stdenv.isDarwin then
-            crossPackage pkgs.pkgsCross.${arch + "-darwin"} {
+          macCrossCrane.buildPackage (
+            common
+            // {
+              doCheck = false;
+              nativeBuildInputs = [ macZigbuild ];
+              CARGO_BUILD_TARGET = "${arch}-apple-darwin";
+              cargoBuildCommand = "cargoWithProfile zigbuild --target ${arch}-apple-darwin";
+              SDKROOT = macSdk;
               MACOSX_DEPLOYMENT_TARGET = "11.3";
+              # Zig needs a writable cache even in an isolated Nix build.
+              preBuild = ''
+                export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
+                export CARGO_ZIGBUILD_CACHE_DIR="$TMPDIR/zigbuild-cache"
+              '';
             }
-          else
-            macCrossCrane.buildPackage (
-              common
-              // {
-                doCheck = false;
-                nativeBuildInputs = [ macZigbuild ];
-                CARGO_BUILD_TARGET = "${arch}-apple-darwin";
-                cargoBuildCommand = "cargoWithProfile zigbuild --target ${arch}-apple-darwin";
-                SDKROOT = macSdk;
-                MACOSX_DEPLOYMENT_TARGET = "11.3";
-                # Zig needs a writable cache even in an isolated Nix build.
-                preBuild = ''
-                  export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
-                  export CARGO_ZIGBUILD_CACHE_DIR="$TMPDIR/zigbuild-cache"
-                '';
-              }
-            );
+          );
         macLipo = if pkgs.stdenv.isDarwin then "lipo" else "llvm-lipo";
         macOtool = if pkgs.stdenv.isDarwin then "otool" else "llvm-otool";
         macUniversal =
