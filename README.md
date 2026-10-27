@@ -109,18 +109,23 @@ On Linux:
 ```sh
 just build-linux # Fully static musl binary; no host glibc or Nix store required
 just build-win   # Cross-compiled x86-64 Windows executable
+just build-mac   # Cross-compiled universal macOS executable (Intel + ARM)
 ```
 
-On macOS:
+`just build-mac` also works natively on macOS:
 
 ```sh
 just build-mac   # Universal binary containing both x86-64 and arm64
 ```
 
-These commands put executables in `build/binaries/`. To assemble a release,
-collect all three executables there and run `just package`. The result is
+These commands put executables in `build/binaries/`. To assemble a release
+entirely on Linux, run `just build-all`, then `just package`. The result is
 `build/opendeck-akp05.plugin.zip`; packaging rejects missing platforms and an
 existing output file. Remove or rename an old ZIP before packaging again.
+
+The Linux-to-macOS build uses Nix-provided cargo-zigbuild and a hash-pinned
+macOS 11.3 SDK, matching the previous Docker toolchain. It compiles and checks
+both binary architectures locally; executing macOS binaries still requires macOS.
 
 CI uses Nix for every build and check, builds Linux and Windows on a Linux
 runner and macOS on a macOS runner, then combines the executables into one ZIP.

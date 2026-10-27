@@ -5,6 +5,8 @@ release: bump tag
 package binaries="build/binaries":
     nix run .#package-plugin -- "{{binaries}}" build/opendeck-akp05.plugin.zip
 
+build-all: build-linux build-win build-mac
+
 install-local: build-linux
     mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/opendeck/plugins/{{id}}"
     install -m755 build/binaries/opendeck-akp05-linux "${XDG_CONFIG_HOME:-$HOME/.config}/opendeck/plugins/{{id}}/opendeck-akp05-linux"

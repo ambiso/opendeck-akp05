@@ -94,24 +94,65 @@
             fi
           '';
         };
+        # Match the SDK used by the former Docker build, now fetched and hash-pinned by Nix.
+        macSdk = pkgs.fetchzip {
+          url = "https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX11.3.sdk.tar.xz";
+          hash = "sha256-BoFWhRSHaD0j3dzDOFtGJ6DiRrdzMJhkjxztxCluFKo=";
+        };
+        macCrossCrane = (crane.mkLib pkgs).overrideToolchain (
+          p:
+          p.pkgsBuildHost.rust-bin.stable.latest.default.override {
+            targets = [
+              "x86_64-apple-darwin"
+              "aarch64-apple-darwin"
+            ];
+          }
+        );
+        macZigbuild = pkgs.callPackage ./nix/cargo-zigbuild.nix { };
         macSlice =
           arch:
-          crossPackage pkgs.pkgsCross.${arch + "-darwin"} {
-            MACOSX_DEPLOYMENT_TARGET = "11.3";
-          };
+          if pkgs.stdenv.isDarwin then
+            crossPackage pkgs.pkgsCross.${arch + "-darwin"} {
+              MACOSX_DEPLOYMENT_TARGET = "11.3";
+            }
+          else
+            macCrossCrane.buildPackage (
+              common
+              // {
+                doCheck = false;
+                nativeBuildInputs = [ macZigbuild ];
+                CARGO_BUILD_TARGET = "${arch}-apple-darwin";
+                cargoBuildCommand = "cargoWithProfile zigbuild --target ${arch}-apple-darwin";
+                SDKROOT = macSdk;
+                MACOSX_DEPLOYMENT_TARGET = "11.3";
+                # Zig needs a writable cache even in an isolated Nix build.
+                preBuild = ''
+                  export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
+                  export CARGO_ZIGBUILD_CACHE_DIR="$TMPDIR/zigbuild-cache"
+                '';
+              }
+            );
+        macLipo = if pkgs.stdenv.isDarwin then "lipo" else "llvm-lipo";
+        macOtool = if pkgs.stdenv.isDarwin then "otool" else "llvm-otool";
         macUniversal =
           pkgs.runCommand "opendeck-akp05-macos-universal"
             {
-              nativeBuildInputs = [ pkgs.cctools ];
+              nativeBuildInputs = [ (if pkgs.stdenv.isDarwin then pkgs.cctools else pkgs.llvmPackages.llvm) ];
             }
             ''
               mkdir -p "$out/bin"
-              lipo -create \
+              ${macLipo} -create \
                 ${macSlice "x86_64"}/bin/opendeck-akp05 \
                 ${macSlice "aarch64"}/bin/opendeck-akp05 \
                 -output "$out/bin/opendeck-akp05"
-              lipo -verify_arch x86_64 arm64 "$out/bin/opendeck-akp05"
-              if otool -L "$out/bin/opendeck-akp05" | grep -q /nix/store; then
+              ${macLipo} "$out/bin/opendeck-akp05" -verify_arch x86_64 arm64
+              for arch in x86_64 arm64; do
+                if ! ${macOtool} -arch "$arch" -l "$out/bin/opendeck-akp05" | grep -E 'minos[[:space:]]+11\.3(\.0)?$' > /dev/null; then
+                  echo "macOS $arch release binary does not target macOS 11.3" >&2
+                  exit 1
+                fi
+              done
+              if ${macOtool} -L "$out/bin/opendeck-akp05" | grep -qE '^[[:space:]]+/nix/store/'; then
                 echo "macOS release binary depends on a Nix store library" >&2
                 exit 1
               fi
@@ -136,13 +177,11 @@
         packages = {
           default = native;
           package-plugin = packagePlugin;
+          macos-universal = macUniversal;
         }
         // lib.optionalAttrs pkgs.stdenv.isLinux {
           linux-static = linuxStatic;
           inherit windows;
-        }
-        // lib.optionalAttrs pkgs.stdenv.isDarwin {
-          macos-universal = macUniversal;
         };
 
         checks = {
