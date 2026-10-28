@@ -4,6 +4,10 @@
 
 An unofficial plugin for Mirabox N4-family devices
 
+## Community
+
+Questions, troubleshooting, or sharing your setup? [Join the Signal group](https://signal.group/#CjQKIHyUkzhTbUGZIeMoFhrnPfTglV_zx8x2wfO7oyA6uthqEhA7ZNnwF_EUd5XmaNIVPtEN).
+
 ## OpenDeck version
 
 Requires OpenDeck 2.5.0 or newer
