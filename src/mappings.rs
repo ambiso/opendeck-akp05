@@ -12,6 +12,9 @@ pub const KEY_COUNT: usize = 15;
 pub const ENCODER_COUNT: usize = 4;
 pub const DEVICE_TYPE: u8 = 7; // StreamDeckPlus
 
+/// Device image index of the full-width touch strip (wire slot 5), see [`Kind::full_strip_format`]
+pub const FULL_STRIP_INDEX: u8 = 4;
+
 #[derive(Debug, Clone)]
 pub enum Kind {
     Akp05E,
@@ -216,6 +219,25 @@ impl Kind {
                 rotation: ImageRotation::Rot0,
                 mirror: ImageMirroring::None,
             }
+        }
+    }
+
+    /// Image format for devices whose touch strip has a full-width image slot.
+    ///
+    /// The four per-knob tiles (slots 1-4, 176x112 each) sit on the panel with
+    /// dark gaps between them. Device index 4 (wire slot 5), which the per-key
+    /// mapping never uses, takes a single 800x128 image covering the whole
+    /// strip edge to edge. Found by testing on a Streonor S10 Pro (firmware
+    /// V3.S10.02.017); other N4-family devices are untested, so opt-in per kind.
+    pub fn full_strip_format(&self) -> Option<ImageFormat> {
+        match self {
+            Self::StreonorS10Pro => Some(ImageFormat {
+                mode: ImageMode::JPEG,
+                size: (800, 128),
+                rotation: ImageRotation::Rot180,
+                mirror: ImageMirroring::None,
+            }),
+            _ => None,
         }
     }
 

@@ -1,8 +1,14 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock, Mutex},
+    time::Duration,
+};
 
 use data_url::DataUrl;
-use image::{DynamicImage, GenericImageView, load_from_memory_with_format};
-use mirajazz::{device::Device, error::MirajazzError, state::DeviceStateUpdate};
+use image::{DynamicImage, GenericImageView, RgbImage, load_from_memory_with_format};
+use mirajazz::{
+    device::Device, error::MirajazzError, state::DeviceStateUpdate, types::ImageFormat,
+};
 use openaction::{device_plugin, global_events::SetImageEvent};
 use tokio::time::{interval, timeout};
 use tokio_util::sync::CancellationToken;
@@ -11,9 +17,16 @@ use crate::{
     DEVICES, config, led_config,
     managed_device::ManagedDevice,
     mappings::{
-        COL_COUNT, CandidateDevice, DEVICE_TYPE, ENCODER_COUNT, KEY_COUNT, Kind, ROW_COUNT,
+        COL_COUNT, CandidateDevice, DEVICE_TYPE, ENCODER_COUNT, FULL_STRIP_INDEX, KEY_COUNT, Kind,
+        ROW_COUNT,
     },
 };
+
+/// For devices with a full-width strip slot: per device serial, the four dial
+/// images side by side, so the strip can be sent as one continuous image.
+/// OpenDeck renders each dial at 200x100; each is scaled to fill its quarter
+/// of the strip (e.g. 200x128 on the S10 Pro).
+static STRIP_CANVASES: LazyLock<Mutex<HashMap<String, RgbImage>>> = LazyLock::new(Default::default);
 
 /// Initializes a device and listens for events
 pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
@@ -25,6 +38,8 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
         device.set_brightness(50).await?;
         device.clear_all_button_images().await?;
         device.flush().await?;
+        // The strip was just blanked; drop any canvas left from before a reconnect
+        forget_strip_canvas(&device);
 
         let cfg = config::load();
         log::info!("Applying config: {:?}", cfg);
@@ -227,9 +242,16 @@ fn map_position(mut position: u8, is_encoder: bool) -> Result<u8, MirajazzError>
 /// Handles different combinations of "set image" event, including clearing the specific buttons and whole device
 pub async fn handle_set_image(device: &Device, evt: SetImageEvent) -> Result<(), MirajazzError> {
     let is_encoder = evt.controller.as_deref() == Some("Encoder");
+    let kind = Kind::from_vid_pid(device.vid, device.pid).unwrap();
+    let full_strip = if is_encoder {
+        kind.full_strip_format()
+    } else {
+        None
+    };
     match (evt.position, evt.image) {
         (Some(position), Some(image)) => {
             log::debug!("Setting image for button {}", position);
+            let dial = position;
             let position = map_position(position, is_encoder)?;
 
             // OpenDeck sends image as a data url, so parse it using a library
@@ -245,7 +267,10 @@ pub async fn handle_set_image(device: &Device, evt: SetImageEvent) -> Result<(),
 
             let image = load_from_memory_with_format(body.as_slice(), image::ImageFormat::Jpeg)?;
 
-            let kind = Kind::from_vid_pid(device.vid, device.pid).unwrap();
+            if let Some(format) = full_strip {
+                return update_full_strip(device, format, dial, Some(image)).await;
+            }
+
             let format = if is_encoder {
                 kind.touch_image_format()
             } else {
@@ -265,11 +290,15 @@ pub async fn handle_set_image(device: &Device, evt: SetImageEvent) -> Result<(),
             device.flush().await?;
         }
         (Some(position), None) => {
+            if let Some(format) = full_strip {
+                return update_full_strip(device, format, position, None).await;
+            }
             let position = map_position(position, is_encoder)?;
             device.clear_button_image(position).await?;
             device.flush().await?;
         }
         (None, None) => {
+            forget_strip_canvas(device);
             device.clear_all_button_images().await?;
             device.flush().await?;
         }
@@ -277,6 +306,51 @@ pub async fn handle_set_image(device: &Device, evt: SetImageEvent) -> Result<(),
     }
 
     Ok(())
+}
+
+/// Draws one dial's image (or blank, for `None`) into its quarter of the
+/// device's strip canvas, then sends the whole canvas to the full-width strip
+/// slot. Used instead of the four gapped per-dial tiles on devices that have
+/// the slot (see [`Kind::full_strip_format`]).
+async fn update_full_strip(
+    device: &Device,
+    format: ImageFormat,
+    dial: u8,
+    image: Option<DynamicImage>,
+) -> Result<(), MirajazzError> {
+    if dial as usize >= ENCODER_COUNT {
+        log::error!("Invalid dial position {dial}");
+        return Err(MirajazzError::BadData);
+    }
+
+    let (strip_w, strip_h) = (format.size.0 as u32, format.size.1 as u32);
+    let tile_w = strip_w / ENCODER_COUNT as u32;
+    let canvas = {
+        let mut canvases = STRIP_CANVASES.lock().unwrap();
+        let canvas = canvases
+            .entry(device.serial_number().clone())
+            .or_insert_with(|| RgbImage::new(strip_w, strip_h));
+        let tile = match image {
+            Some(image) => image
+                .resize_exact(tile_w, strip_h, image::imageops::FilterType::Triangle)
+                .into_rgb8(),
+            None => RgbImage::new(tile_w, strip_h),
+        };
+        image::imageops::replace(canvas, &tile, i64::from(dial) * i64::from(tile_w), 0);
+        canvas.clone()
+    };
+
+    device
+        .set_button_image(FULL_STRIP_INDEX, format, DynamicImage::ImageRgb8(canvas))
+        .await?;
+    device.flush().await
+}
+
+fn forget_strip_canvas(device: &Device) {
+    STRIP_CANVASES
+        .lock()
+        .unwrap()
+        .remove(device.serial_number());
 }
 
 /// Fit `image` inside `size` preserving aspect ratio, centered on black.

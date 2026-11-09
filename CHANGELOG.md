@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+Draw the Streonor S10 Pro touch strip as one continuous image, without gaps between the knob segments
+
 ## [0.11.1] - 2026-10-20
 
 Restore configured static knob LED colors from config.toml and leds.toml (#28).
