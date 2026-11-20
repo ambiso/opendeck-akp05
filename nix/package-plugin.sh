@@ -16,7 +16,7 @@ stage=$(mktemp -d)
 trap 'rm -r -- "$stage"' EXIT
 unzip -q "$windows_zip" -d "$stage"
 dir="$stage/$plugin_id"
-cmp "$manifest_path" "$dir/manifest.json"
+jq -e --slurpfile expected "$manifest_path" '. == $expected[0]' "$dir/manifest.json" >/dev/null
 win=$(jq -er .CodePathWin "$manifest_path")
 file "$dir/$win" | grep -q 'PE32+.*x86-64'
 for asset in transport.dll vcruntime140.dll vcruntime140_1.dll msvcp140.dll LICENSE LICENSE-Mirabox.txt jpeg-notices/LICENSE.md; do

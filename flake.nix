@@ -160,7 +160,6 @@
             pkgs.coreutils
             pkgs.zip
             pkgs.unzip
-            pkgs.diffutils
             pkgs.jq
             pkgs.file
             pkgs.gnugrep
