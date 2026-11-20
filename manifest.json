@@ -1,12 +1,12 @@
 {
-  "Name": "Ajazz AKP05 / Mirabox N4",
+  "Name": "Interstitial N4 Pro",
   "Description": "Device support plugin for Ajazz AKP05 (+variants)",
-  "Author": "ambiso",
-  "Version": "0.11.1",
-  "PluginUUID": "com.github.ambiso.opendeck-akp05",
+  "Author": "Interstitial contributors, based on the device plugin by ambiso",
+  "Version": "0.14.0",
+  "PluginUUID": "com.stevengriffin.interstitial.n4",
   "CodePathLin": "opendeck-akp05-linux",
   "CodePathMac": "opendeck-akp05-mac",
-  "CodePathWin": "opendeck-akp05-win.exe",
+  "CodePathWin": "opendeck-n4-win.exe",
   "Icon": "assets/icon",
   "Category": "Hardware",
   "OS": [

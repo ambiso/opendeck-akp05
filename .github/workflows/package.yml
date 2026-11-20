@@ -1,34 +1,51 @@
-name: Package
-
-on:
-  push:
-    branches: ["main"]
-    tags:
-      - "*"
-  pull_request:
-    branches: ["main"]
-
-env:
-  CARGO_TERM_COLOR: always
-
+name: Verify plugin
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
 jobs:
-  build:
-    runs-on: ubuntu-latest
-
+  windows:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install dependencies
-        run: cargo install just && rustup target add x86_64-pc-windows-gnu && sudo apt-get update -y && sudo apt-get install -y gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
-      - name: Package
-        run: just package
-      - name: Run tests
-        run: cargo test --verbose
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Locate NASM
+        shell: pwsh
+        run: |
+          if (!(Get-Command nasm -ErrorAction SilentlyContinue)) {
+            choco install nasm -y --no-progress
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            $nasm = Join-Path $env:ProgramFiles NASM
+            if (!(Test-Path "$nasm/nasm.exe")) { throw 'NASM installation not found' }
+            $nasm >> $env:GITHUB_PATH
+          }
+      - name: Check Windows x64
+        shell: pwsh
+        run: |
+          cargo test --release --locked --all-targets --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo clippy --release --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+      - name: Build Windows package
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $crt = Get-ChildItem "$vs/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT/vcruntime140.dll" | Sort-Object { $_.VersionInfo.FileVersionRaw } -Descending | Select-Object -First 1
+          ./scripts/package-windows.ps1 -CrtDirectory $crt.DirectoryName
       - uses: actions/upload-artifact@v4
         with:
-          name: opendeck-akp05.plugin
-          path: build/
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        if: github.ref_type == 'tag'
-        with:
-          files: build/opendeck-akp05.plugin.zip
+          name: interstitial-n4-windows-x64
+          path: build/*.zip
+          if-no-files-found: error
+  unix:
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev libusb-1.0-0-dev libdbus-1-dev
+      - run: cargo test --release --locked --all-targets

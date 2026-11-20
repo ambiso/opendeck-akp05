@@ -7,6 +7,14 @@ use crate::led_config::LedConfig;
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// Paint the lower strip as a continuous instrument surface on the Windows VSD N4 Pro.
+    pub continuous_strip: bool,
+    /// Use per-slot graph telemetry for the VSD N4 Pro knob lights.
+    pub ambient_rings: Option<bool>,
+    /// Native framebuffer Y offset. The two common panel orientations use 0 or 320.
+    pub strip_native_y: u16,
+    /// Logical pixels below centre within the 160-pixel frame (-30..30).
+    pub strip_center_offset: i16,
     /// `None` — no vibration command sent; `Some(true|false)` — enable/disable
     /// on connect. Only applied on devices whose firmware supports it.
     pub vibration: Option<bool>,
@@ -39,6 +47,6 @@ fn read_toml<T: for<'de> Deserialize<'de>>(path: PathBuf) -> Option<T> {
     }
 }
 
-fn config_path(name: &str) -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join("opendeck-akp05").join(name))
+pub(crate) fn config_path(name: &str) -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join("Interstitial").join(name))
 }

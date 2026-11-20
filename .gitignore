@@ -4,4 +4,3 @@
 /.intentionally-empty-file.o
 libtransport.so
 .direnv/
-.cargo/config.toml

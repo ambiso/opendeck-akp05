@@ -1,6 +1,6 @@
 [package]
 name = "opendeck-akp05"
-version = "0.11.1"
+version = "0.14.0"
 edition = "2024"
 license = "GPL-3.0"
 
@@ -11,6 +11,7 @@ env_logger = "0.11"
 futures-lite = "2.6.0"
 image = { version = "0.25.6", default-features = false, features = [
   "bmp",
+  "png",
   "jpeg",
 ] }
 log = "0.4.27"
@@ -23,3 +24,11 @@ toml = "0.8"
 
 [patch.crates-io]
 mirajazz = { git = "https://github.com/ambiso/mirajazz.git" }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+windows-sys = { version = "0.61", features = ["Win32_Foundation","Win32_System_RemoteDesktop","Win32_UI_WindowsAndMessaging","Win32_Graphics_Gdi","Win32_System_Threading","Win32_Security","Win32_System_LibraryLoader","Win32_System_Registry","Win32_System_Memory"] }
+async-hid = "0.5.3"
+libloading = "0.8"
+notify = { version = "8", default-features = false }
+turbojpeg = { version = "1.5.1", default-features = false, features = ["cmake", "require-simd"] }

@@ -1,4 +1,4 @@
-id := "com.github.ambiso.opendeck-akp05.sdPlugin"
+id := "com.stevengriffin.interstitial.n4.sdPlugin"
 
 release: bump package tag
 
@@ -45,9 +45,12 @@ collect:
     mkdir -p build/{{id}}
     cp -r assets build/{{id}}
     cp manifest.json build/{{id}}
+    cp vendor/mirabox/transport.dll build/{{id}}
+    cp vendor/mirabox/LICENSE build/{{id}}/LICENSE-Mirabox.txt
+    cp -r vendor/jpeg-notices build/{{id}}
     -cp target/plugin-linux/x86_64-unknown-linux-gnu/release/opendeck-akp05 build/{{id}}/opendeck-akp05-linux
     -cp target/plugin-mac/universal2-apple-darwin/release/opendeck-akp05 build/{{id}}/opendeck-akp05-mac
-    -cp target/plugin-win/x86_64-pc-windows-gnu/release/opendeck-akp05.exe build/{{id}}/opendeck-akp05-win.exe
+    -cp target/plugin-win/x86_64-pc-windows-gnu/release/opendeck-akp05.exe build/{{id}}/opendeck-n4-win.exe
 
 [working-directory: "build"]
 zip:

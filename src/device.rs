@@ -1,4 +1,7 @@
+use std::sync::OnceLock;
 use std::time::Duration;
+
+static CONTINUOUS_STRIP: OnceLock<bool> = OnceLock::new();
 
 use data_url::DataUrl;
 use image::{DynamicImage, GenericImageView, load_from_memory_with_format};
@@ -18,6 +21,7 @@ use crate::{
 pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
     log::info!("Running device task for {:?}", candidate);
 
+    let cfg = config::load();
     // Wrap in a closure so we can use `?` operator
     let device = async {
         let device = connect(&candidate).await?;
@@ -26,11 +30,12 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
         device.clear_all_button_images().await?;
         device.flush().await?;
 
-        let cfg = config::load();
         log::info!("Applying config: {:?}", cfg);
-        if let Some(led_config::LedMode::Static { colors }) = cfg.leds.mode {
+        if let Some(led_config::LedMode::Static { colors }) = &cfg.leds.mode {
             device.set_led_brightness(cfg.leds.brightness).await?;
-            device.set_led_colors(&colors).await?;
+            device.set_led_colors(colors).await?;
+        } else if cfg.ambient_rings == Some(false) && matches!(candidate.kind, Kind::VsdN4Pro) {
+            device.set_led_colors(&[[0; 3]; 4]).await?;
         }
 
         if let Some(enabled) = cfg.vibration {
@@ -63,9 +68,21 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
         }
     };
 
+    #[cfg(windows)]
+    let panel_generation = {
+        if cfg.continuous_strip && matches!(candidate.kind, Kind::VsdN4Pro) {
+            crate::strip_backdrop::start(&candidate, cfg.strip_native_y, cfg.strip_center_offset)
+                .await
+                .map_err(|e| log::warn!("Joined panel unavailable: {e}"))
+                .ok()
+        } else {
+            None
+        }
+    };
+
     log::info!("Registering device {}", candidate.id);
-    if let Some(outbound) = OUTBOUND_EVENT_MANAGER.lock().await.as_mut() {
-        outbound
+    if let Some(outbound) = OUTBOUND_EVENT_MANAGER.lock().await.as_mut()
+        && let Err(error) = outbound
             .register_device(
                 candidate.id.clone(),
                 candidate.kind.human_name(),
@@ -75,10 +92,32 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
                 DEVICE_TYPE,
             )
             .await
-            .unwrap();
+    {
+        #[cfg(windows)]
+        crate::strip_backdrop::stop(&candidate.id, panel_generation).await;
+        log::error!("Could not register {}: {error:?}", candidate.id);
+        return;
     }
 
     DEVICES.write().await.insert(candidate.id.clone(), device);
+
+    #[cfg(windows)]
+    let ring_stop = token.child_token();
+    #[cfg(windows)]
+    let ring_task =
+        if cfg.ambient_rings == Some(true) && cfg.leds.mode.is_none() && panel_generation.is_some()
+        {
+            crate::strip_backdrop::desktop(&candidate.id).map(|rx| {
+                tokio::spawn(crate::ambient::run(
+                    candidate.id.clone(),
+                    rx,
+                    ring_stop.clone(),
+                    cfg.leds.brightness,
+                ))
+            })
+        } else {
+            None
+        };
 
     tokio::select! {
         _ = device_events_task(&candidate) => {},
@@ -86,6 +125,13 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
         _ = token.cancelled() => {}
     };
 
+    #[cfg(windows)]
+    if let Some(t) = ring_task {
+        ring_stop.cancel();
+        let _ = t.await;
+    }
+    #[cfg(windows)]
+    crate::strip_backdrop::stop(&candidate.id, panel_generation).await;
     log::info!("Shutting down device {:?}", candidate);
 
     if let Some(device) = DEVICES.read().await.get(&candidate.id) {
@@ -173,6 +219,10 @@ async fn device_events_task(candidate: &CandidateDevice) -> Result<(), MirajazzE
             }
         };
 
+        #[cfg(windows)]
+        if crate::strip_backdrop::hidden(&candidate.id) {
+            continue;
+        }
         for update in updates {
             log::debug!("New update: {:#?}", update);
 
@@ -217,7 +267,12 @@ async fn keepalive_task(candidate: &CandidateDevice) -> Result<(), MirajazzError
             None => return Ok(()),
         };
 
-        if let Err(e) = device.keep_alive().await {
+        let result = {
+            #[cfg(windows)]
+            let _output = crate::strip_backdrop::OUTPUT.lock().await;
+            device.keep_alive().await
+        };
+        if let Err(e) = result {
             drop(devices_lock);
             if !handle_error(&candidate.id, e).await {
                 break;
@@ -257,6 +312,8 @@ fn map_position(mut position: u8, is_encoder: bool) -> Result<u8, MirajazzError>
 
 /// Handles different combinations of "set image" event, including clearing the specific buttons and whole device
 pub async fn handle_set_image(device: &Device, evt: SetImageEvent) -> Result<(), MirajazzError> {
+    #[cfg(windows)]
+    let _output = crate::strip_backdrop::OUTPUT.lock().await;
     let is_encoder = evt.controller.as_deref() == Some("Encoder");
     match (evt.position, evt.image) {
         (Some(position), Some(image)) => {
@@ -276,6 +333,10 @@ pub async fn handle_set_image(device: &Device, evt: SetImageEvent) -> Result<(),
 
             let image = load_from_memory_with_format(body.as_slice(), image::ImageFormat::Jpeg)?;
 
+            #[cfg(windows)]
+            if is_encoder && crate::strip_backdrop::update(&evt.device, position, Some(&image)) {
+                return Ok(());
+            }
             let kind = Kind::from_vid_pid(device.vid, device.pid).unwrap();
             let format = if is_encoder {
                 kind.touch_image_format()
@@ -286,21 +347,50 @@ pub async fn handle_set_image(device: &Device, evt: SetImageEvent) -> Result<(),
             // dial images (OpenDeck renders 200x100, the N4 strip is 176x112):
             // pre-fit encoder images preserving aspect ratio, so that stretch
             // becomes a no-op.
-            let image = if is_encoder {
+            let continuous = matches!(kind, Kind::VsdN4Pro)
+                && cfg!(windows)
+                && *CONTINUOUS_STRIP.get_or_init(|| config::load().continuous_strip);
+            let image = if is_encoder && continuous {
+                crate::strip::full_height(&image, format.size)
+            } else if is_encoder {
                 fit_into(image, format.size)
             } else {
                 image
             };
 
+            #[cfg(windows)]
+            if !is_encoder {
+                let bytes = mirajazz::images::convert_image_with_format(format, image).await?;
+                if !crate::strip_backdrop::cache_key(&evt.device, position, Some(&bytes)) {
+                    device.write_image(position, &bytes).await?;
+                    device.flush().await?;
+                }
+                return Ok(());
+            }
             device.set_button_image(position, format, image).await?;
             device.flush().await?;
         }
         (Some(position), None) => {
+            #[cfg(windows)]
+            if is_encoder && crate::strip_backdrop::update(&evt.device, position, None) {
+                return Ok(());
+            }
             let position = map_position(position, is_encoder)?;
+            #[cfg(windows)]
+            if !is_encoder && crate::strip_backdrop::cache_key(&evt.device, position, None) {
+                return Ok(());
+            }
             device.clear_button_image(position).await?;
             device.flush().await?;
         }
         (None, None) => {
+            #[cfg(windows)]
+            {
+                crate::strip_backdrop::reset(&evt.device);
+                if crate::strip_backdrop::hidden(&evt.device) {
+                    return Ok(());
+                }
+            }
             device.clear_all_button_images().await?;
             device.flush().await?;
         }

@@ -1,4 +1,4 @@
-use device::{handle_error, handle_set_image};
+use device::handle_set_image;
 use mirajazz::device::Device;
 use openaction::*;
 use std::{collections::HashMap, process::exit, sync::LazyLock};
@@ -9,11 +9,22 @@ use watcher::watcher_task;
 #[cfg(not(target_os = "windows"))]
 use tokio::signal::unix::{SignalKind, signal};
 
+#[cfg(windows)]
+mod ambient;
 mod config;
+#[cfg(windows)]
+mod desktop_monitor;
+#[cfg(windows)]
+mod desktop_state;
 mod device;
+#[cfg(windows)]
+mod frame_jpeg;
 mod inputs;
 mod led_config;
 mod mappings;
+mod strip;
+#[cfg(windows)]
+mod strip_backdrop;
 mod watcher;
 
 pub static DEVICES: LazyLock<RwLock<HashMap<String, Device>>> =
@@ -54,10 +65,9 @@ impl openaction::GlobalEventHandler for GlobalEventHandler {
         let id = event.device.clone();
 
         if let Some(device) = DEVICES.read().await.get(&event.device) {
-            handle_set_image(device, event)
-                .await
-                .map_err(async |err| handle_error(&id, err).await)
-                .ok();
+            if let Err(error) = handle_set_image(device, event).await {
+                log::warn!("Image update for {id} failed: {error}");
+            }
         } else {
             log::error!("Received event for unknown device: {}", event.device);
         }
@@ -75,11 +85,11 @@ impl openaction::GlobalEventHandler for GlobalEventHandler {
         let id = event.device.clone();
 
         if let Some(device) = DEVICES.read().await.get(&event.device) {
-            device
-                .set_brightness(event.brightness)
-                .await
-                .map_err(async |err| handle_error(&id, err).await)
-                .ok();
+            #[cfg(windows)]
+            let _output = crate::strip_backdrop::OUTPUT.lock().await;
+            if let Err(error) = device.set_brightness(event.brightness).await {
+                log::warn!("Brightness update for {id} failed: {error}");
+            }
         } else {
             log::error!("Received event for unknown device: {}", event.device);
         }
@@ -94,7 +104,7 @@ impl openaction::ActionEventHandler for ActionEventHandler {}
 async fn shutdown() {
     let tokens = TOKENS.write().await;
 
-    for (_, token) in tokens.iter() {
+    for token in tokens.values() {
         token.cancel();
     }
 }
@@ -126,6 +136,12 @@ async fn sigterm() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(windows)]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--check-encoder")) {
+        frame_jpeg::probe()?;
+        println!("N4 JPEG 800x160 OK");
+        return Ok(());
+    }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     tokio::select! {
