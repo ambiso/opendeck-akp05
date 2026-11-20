@@ -28,6 +28,7 @@ pub fn full_height(image: &DynamicImage, size: (usize, usize)) -> DynamicImage {
     }))
 }
 
+#[cfg(any(windows, test))]
 pub type Frames = [Option<std::sync::Arc<RgbImage>>; 4];
 
 /// Rotate after composing so the four logical columns remain aligned with
@@ -44,6 +45,7 @@ pub fn compose_on(frames: &Frames, center_offset: i16, artwork: Option<&RgbImage
     img
 }
 
+#[cfg(any(windows, test))]
 pub fn compose_into(
     img: &mut RgbImage,
     frames: &Frames,

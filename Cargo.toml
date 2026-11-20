@@ -1,29 +1,27 @@
 [package]
 name = "opendeck-akp05"
-version = "0.14.0"
+version = "0.14.1"
 edition = "2024"
+rust-version = "1.88"
 license = "GPL-3.0"
 
 [dependencies]
-data-url = "0.3.1"
-dirs = "5"
-env_logger = "0.11"
-futures-lite = "2.6.0"
-image = { version = "0.25.6", default-features = false, features = [
+data-url = "0.3.2"
+dirs = "7"
+env_logger = "0.11.11"
+futures-lite = "2.6.1"
+image = { version = "0.25.10", default-features = false, features = [
   "bmp",
   "png",
   "jpeg",
 ] }
-log = "0.4.27"
-mirajazz = "0.16.2"
-openaction = "1.1.5"
-serde = { version = "1", features = ["derive"] }
-tokio = { version = "1.44.2", features = ["full"] }
-tokio-util = { version = "0.7.15", features = ["full"] }
-toml = "0.8"
-
-[patch.crates-io]
-mirajazz = { git = "https://github.com/ambiso/mirajazz.git" }
+log = "0.4.34"
+mirajazz = "0.16.3"
+openaction = "2.8.0"
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.54.1", features = ["full"] }
+tokio-util = { version = "0.7.20", features = ["full"] }
+toml = "1.1.8"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

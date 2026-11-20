@@ -2,7 +2,7 @@
   "Name": "Interstitial N4 Pro",
   "Description": "Device support plugin for Ajazz AKP05 (+variants)",
   "Author": "Interstitial contributors, based on the device plugin by ambiso",
-  "Version": "0.14.0",
+  "Version": "0.14.1",
   "PluginUUID": "com.stevengriffin.interstitial.n4",
   "CodePathLin": "opendeck-akp05-linux",
   "CodePathMac": "opendeck-akp05-mac",

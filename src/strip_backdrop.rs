@@ -2,6 +2,7 @@
 //! the SDK's separate boot-logo functions write to ROM and are never loaded.
 use crate::desktop_monitor::{Desktop, Monitor};
 use crate::frame_jpeg::FrameEncoder;
+use crate::managed_device::ManagedDevice;
 use crate::mappings::CandidateDevice;
 use async_hid::DeviceId;
 use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
@@ -53,12 +54,8 @@ use tokio::sync::{oneshot, watch};
 
 type Simple = unsafe extern "C" fn(*mut c_void) -> u32;
 type KeyWrite = unsafe extern "C" fn(*mut c_void, *const u8, usize, u8) -> u32;
-type Clear = unsafe extern "C" fn(*mut c_void, u8) -> u32;
 type Error = Box<dyn std::error::Error>;
 
-// Serialise SDK commits with mirajazz's key, sleep and brightness writes. The
-// input reader remains on the original HID input handle and keeps its mappings.
-pub static OUTPUT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 type KeyCache = Mutex<HashMap<u8, Vec<u8>>>;
 struct DisplayState {
     hidden: AtomicBool,
@@ -90,15 +87,15 @@ pub async fn start(
     candidate: &CandidateDevice,
     y: u16,
     center_offset: i16,
-) -> Result<thread::ThreadId, String> {
+    managed: Arc<ManagedDevice>,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<(), String> {
     if !(-30..=30).contains(&center_offset) {
         return Err("strip_center_offset must be between -30 and 30".into());
     }
     if y > 320 {
         return Err("strip exceeds framebuffer".into());
     }
-    let _change = LIFECYCLE.lock().await;
-    retire(&candidate.id, None).await;
     let id = candidate.id.clone();
     let device = candidate.clone();
     let (frames, mut rx) = watch::channel(Frames::default());
@@ -112,7 +109,7 @@ pub async fn start(
         keys: Mutex::default(),
         reset_count: AtomicU64::new(0),
         reset_wake: Default::default(),
-        cancel: Default::default(),
+        cancel,
         offset: AtomicI16::new(center_offset),
     });
     let watcher = alignment_watcher(&frames, &state)
@@ -131,28 +128,25 @@ pub async fn start(
             }
         };
         if ready.send(Ok(())).is_ok() {
-            display.run(&session, &rt, &mut rx, &mut worker_desktop);
+            display.run(&session, &managed, &rt, &mut rx, &mut worker_desktop);
         }
     });
+    PANELS.lock().unwrap().insert(
+        id,
+        Panel {
+            frames,
+            worker,
+            uses_artwork,
+            desktop,
+            _monitor: monitor,
+            state,
+            _watcher: watcher,
+        },
+    );
     match started.await {
-        Ok(Ok(())) => {
-            let generation = worker.thread().id();
-            PANELS.lock().unwrap().insert(
-                id,
-                Panel {
-                    frames,
-                    worker,
-                    uses_artwork,
-                    desktop,
-                    _monitor: monitor,
-                    state,
-                    _watcher: watcher,
-                },
-            );
-            Ok(generation)
-        }
+        Ok(Ok(())) => Ok(()),
         result => {
-            let _ = worker.join();
+            stop(&candidate.id).await;
             Err(format!("Could not start panel worker: {result:?}"))
         }
     }
@@ -200,12 +194,26 @@ impl DisplayWorker {
     fn run(
         &mut self,
         session: &Session,
+        managed: &ManagedDevice,
         rt: &tokio::runtime::Handle,
         rx: &mut watch::Receiver<Frames>,
         desktop: &mut watch::Receiver<Desktop>,
     ) {
         let mut changed = true;
+        let mut power = managed.power_changes();
         loop {
+            let awake = {
+                let current = power.borrow_and_update();
+                if current.has_changed() {
+                    self.last_scene = None;
+                }
+                *current
+            };
+            if !awake {
+                if !rt.block_on(async { tokio::select! { _ = self.state.cancel.cancelled() => false, r = power.changed() => r.is_ok() } }) { break; }
+                self.last_scene = None;
+                continue;
+            }
             let current_desktop = *desktop.borrow_and_update();
             let scene = Scene {
                 light: current_desktop.light,
@@ -214,7 +222,7 @@ impl DisplayWorker {
                 resume: current_desktop.epoch,
             };
             let transition = self.last_scene != Some(scene);
-            if transition && let Err(e) = self.change_scene(session, scene) {
+            if transition && let Err(e) = self.change_scene(session, managed, scene) {
                 status(&format!("Display transition failed: {e}"));
                 if rt
                     .block_on(async {
@@ -229,23 +237,33 @@ impl DisplayWorker {
             }
             if draw_instruments(scene.locked, changed, transition) {
                 let current = rx.borrow_and_update().clone();
-                if let Err(e) = self.paint_strip(session, &current) {
+                if let Err(e) = self.paint_strip(session, managed, &current) {
                     status(&format!("Joined frame failed: {e}"));
                     break;
                 }
             }
-            let wake = rt.block_on(wait_for_display(rx, desktop, &self.state, scene.locked));
+            let wake = rt.block_on(async { tokio::select! {
+                biased;
+                _ = self.state.cancel.cancelled() => None,
+                result = power.changed() => { self.last_scene = None; result.ok().map(|_| true) },
+                wake = wait_for_display(rx, desktop, &self.state, scene.locked) => wake,
+            }});
             let Some(has_frame) = wake else {
                 break;
             };
             changed = has_frame;
         }
-        let _guard = OUTPUT.blocking_lock();
-        session.clear();
     }
 
-    fn change_scene(&mut self, session: &Session, scene: Scene) -> Result<(), String> {
-        let _guard = OUTPUT.blocking_lock();
+    fn change_scene(
+        &mut self,
+        session: &Session,
+        managed: &ManagedDevice,
+        scene: Scene,
+    ) -> Result<(), String> {
+        let Some(_guard) = managed.awake_guard() else {
+            return Ok(());
+        };
         if scene.locked {
             self.state.hidden.store(true, Ordering::Release);
         }
@@ -267,7 +285,12 @@ impl DisplayWorker {
         Ok(())
     }
 
-    fn paint_strip(&mut self, session: &Session, frames: &Frames) -> Result<(), String> {
+    fn paint_strip(
+        &mut self,
+        session: &Session,
+        managed: &ManagedDevice,
+        frames: &Frames,
+    ) -> Result<(), String> {
         if self.poll_offset
             && let Some(value) = crate::config::config_path("config.toml")
                 .as_deref()
@@ -282,7 +305,9 @@ impl DisplayWorker {
             .encode(&self.surface)
             .map_err(|e| e.to_string())?;
         {
-            let _guard = OUTPUT.blocking_lock();
+            let Some(_guard) = managed.awake_guard() else {
+                return Ok(());
+            };
             session.present_jpeg(jpeg, 800, 160, self.y)?;
         }
         if self.reported_offset != Some(offset) && frames.iter().all(Option::is_some) {
@@ -448,26 +473,8 @@ pub fn reset(id: &str) {
         panel.state.reset_wake.notify_one();
     }
 }
-static LIFECYCLE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-pub async fn stop(id: &str, generation: Option<thread::ThreadId>) {
-    if let Some(generation) = generation {
-        let _change = LIFECYCLE.lock().await;
-        retire(id, Some(generation)).await;
-    }
-}
-async fn retire(id: &str, expected: Option<thread::ThreadId>) {
-    let panel = {
-        let mut panels = PANELS.lock().unwrap();
-        if let Some(expected) = expected
-            && !panels
-                .get(id)
-                .is_some_and(|p| p.worker.thread().id() == expected)
-        {
-            return;
-        }
-        panels.remove(id)
-    };
+pub async fn stop(id: &str) {
+    let panel = PANELS.lock().unwrap().remove(id);
     if let Some(Panel {
         frames,
         worker,
@@ -497,7 +504,6 @@ struct Session {
     close: Close,
     send: Draw,
     refresh: Simple,
-    erase: Clear,
     clear_keys: Simple,
     write_key: KeyWrite,
 }
@@ -518,7 +524,6 @@ impl Session {
                 refresh: *lib.get::<Simple>(b"transport_refresh\0")?,
                 clear_keys: *lib.get::<Simple>(b"transport_clear_all_keys\0")?,
                 write_key: *lib.get::<KeyWrite>(b"transport_set_key_image_stream\0")?,
-                erase: *lib.get::<Clear>(b"transport_clear_background_frame_stream\0")?,
                 handle: ptr::null_mut(),
                 free,
                 list: enumerate(candidate.dev.vendor_id, candidate.dev.product_id),
@@ -604,12 +609,6 @@ impl Session {
             return Err(format!("refresh {committed:#x}"));
         }
         Ok(())
-    }
-    fn clear(&self) {
-        unsafe {
-            (self.erase)(self.handle, 0);
-            (self.refresh)(self.handle);
-        }
     }
 }
 impl Drop for Session {

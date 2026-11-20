@@ -1,9 +1,20 @@
 use device::handle_set_image;
-use mirajazz::device::Device;
-use openaction::*;
-use std::{collections::HashMap, process::exit, sync::LazyLock};
-use tokio::sync::{Mutex, RwLock};
-use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use managed_device::ManagedDevice;
+use openaction::{
+    OpenActionResult, async_trait,
+    global_events::{
+        SetBrightnessEvent, SetImageEvent, SystemDidWakeUpEvent, set_global_event_handler,
+    },
+};
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock},
+};
+use tokio::{
+    sync::{Mutex, Notify, RwLock},
+    task::JoinHandle,
+};
+use tokio_util::sync::CancellationToken;
 use watcher::watcher_task;
 
 #[cfg(not(target_os = "windows"))]
@@ -21,52 +32,61 @@ mod device;
 mod frame_jpeg;
 mod inputs;
 mod led_config;
+mod managed_device;
 mod mappings;
 mod strip;
 #[cfg(windows)]
 mod strip_backdrop;
 mod watcher;
 
-pub static DEVICES: LazyLock<RwLock<HashMap<String, Device>>> =
+pub static DEVICES: LazyLock<RwLock<HashMap<String, Arc<ManagedDevice>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
-pub static TOKENS: LazyLock<RwLock<HashMap<String, CancellationToken>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
-pub static TRACKER: LazyLock<Mutex<TaskTracker>> = LazyLock::new(|| Mutex::new(TaskTracker::new()));
+static HANDLER: LazyLock<GlobalEventHandler> = LazyLock::new(|| GlobalEventHandler {
+    shutdown: CancellationToken::new(),
+    resume: Arc::new(Notify::new()),
+    watcher: Mutex::new(None),
+});
 
-struct GlobalEventHandler {}
-impl openaction::GlobalEventHandler for GlobalEventHandler {
-    async fn plugin_ready(
-        &self,
-        _outbound: &mut openaction::OutboundEventManager,
-    ) -> EventHandlerResult {
-        let tracker = TRACKER.lock().await.clone();
+struct GlobalEventHandler {
+    shutdown: CancellationToken,
+    resume: Arc<Notify>,
+    watcher: Mutex<Option<JoinHandle<()>>>,
+}
+#[async_trait]
+impl openaction::global_events::GlobalEventHandler for GlobalEventHandler {
+    async fn system_did_wake_up(&self, _event: SystemDidWakeUpEvent) -> OpenActionResult<()> {
+        log::info!("System resumed; scheduling USB device rediscovery");
+        self.resume.notify_one();
+        Ok(())
+    }
 
-        let token = CancellationToken::new();
-        tracker.spawn(watcher_task(token.clone()));
-
-        TOKENS
-            .write()
-            .await
-            .insert("_watcher_task".to_string(), token);
+    async fn plugin_ready(&self) -> OpenActionResult<()> {
+        let mut watcher = self.watcher.lock().await;
+        if watcher.is_none() {
+            *watcher = Some(tokio::spawn(watcher_task(
+                self.shutdown.clone(),
+                self.resume.clone(),
+            )));
+        }
 
         log::info!("Plugin initialized");
 
         Ok(())
     }
 
-    async fn set_image(
-        &self,
-        event: SetImageEvent,
-        _outbound: &mut OutboundEventManager,
-    ) -> EventHandlerResult {
+    async fn device_plugin_set_image(&self, event: SetImageEvent) -> OpenActionResult<()> {
         log::debug!("Asked to set image");
         log::trace!("Set image event: {:#?}", event);
 
         let id = event.device.clone();
 
-        if let Some(device) = DEVICES.read().await.get(&event.device) {
-            if let Err(error) = handle_set_image(device, event).await {
-                log::warn!("Image update for {id} failed: {error}");
+        let device = DEVICES.read().await.get(&event.device).cloned();
+        if let Some(device) = device {
+            if let Err(err) = device
+                .with_awake_device(async |device| handle_set_image(device, event).await)
+                .await
+            {
+                device.handle_error(&id, err);
             }
         } else {
             log::error!("Received event for unknown device: {}", event.device);
@@ -75,20 +95,18 @@ impl openaction::GlobalEventHandler for GlobalEventHandler {
         Ok(())
     }
 
-    async fn set_brightness(
+    async fn device_plugin_set_brightness(
         &self,
         event: SetBrightnessEvent,
-        _outbound: &mut OutboundEventManager,
-    ) -> EventHandlerResult {
+    ) -> OpenActionResult<()> {
         log::debug!("Asked to set brightness: {:#?}", event);
 
         let id = event.device.clone();
 
-        if let Some(device) = DEVICES.read().await.get(&event.device) {
-            #[cfg(windows)]
-            let _output = crate::strip_backdrop::OUTPUT.lock().await;
-            if let Err(error) = device.set_brightness(event.brightness).await {
-                log::warn!("Brightness update for {id} failed: {error}");
+        let device = DEVICES.read().await.get(&event.device).cloned();
+        if let Some(device) = device {
+            if let Err(err) = device.set_brightness(event.brightness).await {
+                device.handle_error(&id, err);
             }
         } else {
             log::error!("Received event for unknown device: {}", event.device);
@@ -98,22 +116,18 @@ impl openaction::GlobalEventHandler for GlobalEventHandler {
     }
 }
 
-struct ActionEventHandler {}
-impl openaction::ActionEventHandler for ActionEventHandler {}
-
 async fn shutdown() {
-    let tokens = TOKENS.write().await;
-
-    for token in tokens.values() {
-        token.cancel();
+    HANDLER.shutdown.cancel();
+    if let Some(watcher) = HANDLER.watcher.lock().await.take()
+        && let Err(err) = watcher.await
+    {
+        log::error!("Device watcher failed: {err}");
     }
 }
 
-async fn connect() {
-    if let Err(error) = init_plugin(GlobalEventHandler {}, ActionEventHandler {}).await {
-        log::error!("Failed to initialize plugin: {}", error);
-        exit(1);
-    }
+async fn connect() -> OpenActionResult<()> {
+    set_global_event_handler(&*HANDLER);
+    openaction::run(std::env::args().collect()).await
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -144,23 +158,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    tokio::select! {
-        _ = connect() => {},
-        _ = sigterm() => {},
-    }
+    let result = tokio::select! {
+        result = connect() => result,
+        _ = sigterm() => Ok(()),
+    };
 
     log::info!("Shutting down");
 
     shutdown().await;
 
-    let tracker = TRACKER.lock().await.clone();
-
-    log::info!("Waiting for tasks to finish");
-
-    tracker.close();
-    tracker.wait().await;
-
     log::info!("Tasks are finished, exiting now");
 
-    Ok(())
+    result.map_err(Into::into)
 }

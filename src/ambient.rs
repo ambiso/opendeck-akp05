@@ -1,5 +1,5 @@
 //! Ambient rings consume the same samples as the four independent graph actions.
-use crate::{DEVICES, desktop_monitor::Desktop, strip_backdrop::OUTPUT};
+use crate::{desktop_monitor::Desktop, managed_device::ManagedDevice};
 use std::{
     io,
     os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
@@ -107,23 +107,32 @@ impl Ring {
     }
 }
 pub async fn run(
-    id: String,
+    id: &str,
+    device: &ManagedDevice,
     mut desktop: watch::Receiver<Desktop>,
     cancel: CancellationToken,
     brightness: u8,
 ) {
-    let samples = match Samples::new(&id) {
+    let samples = match Samples::new(id) {
         Ok(v) => v,
         Err(e) => {
             log::warn!("Ambient ring mapping unavailable: {e}");
             return;
         }
     };
+    let mut power = device.power_changes();
     let mut rings = [Ring::default(); 4];
     let mut last = None;
     let mut failed = false;
     let mut epoch = None;
     loop {
+        let awake = {
+            let current = power.borrow_and_update();
+            if current.has_changed() {
+                last = None;
+            }
+            *current
+        };
         let scene = *desktop.borrow_and_update();
         let locked = scene.locked;
         if epoch != Some(scene.epoch) {
@@ -140,23 +149,23 @@ pub async fn run(
                 .as_secs();
             std::array::from_fn(|i| rings[i].color(words[i], now))
         };
-        if failed || last != Some(colors) {
-            let devices = DEVICES.read().await;
-            let Some(device) = devices.get(&id) else {
-                break;
-            };
-            let _output = OUTPUT.lock().await;
-            if desktop.borrow().locked != locked {
-                continue;
-            }
-            let result = async {
-                if last.is_none() {
-                    device.set_led_brightness(brightness).await?;
-                }
-                device.set_led_colors(&colors).await
-            }
-            .await;
+        if awake && (failed || last != Some(colors)) {
+            let mut written = false;
+            let result = device
+                .with_awake_device(async |device| {
+                    if desktop.borrow().locked != locked {
+                        return Ok(());
+                    }
+                    if last.is_none() {
+                        device.set_led_brightness(brightness).await?;
+                    }
+                    device.set_led_colors(&colors).await?;
+                    written = true;
+                    Ok(())
+                })
+                .await;
             match result {
+                Ok(()) if !written => {}
                 Ok(()) => {
                     if last.is_none()
                         || failed
@@ -179,8 +188,9 @@ pub async fn run(
         }
         tokio::select! {
             _=cancel.cancelled()=>break,
+            event=power.changed()=>{ if event.is_err(){break} last=None; },
             event=desktop.changed()=>if event.is_err(){break},
-            _=tokio::time::sleep(Duration::from_secs(1)),if !locked||failed=>{}
+            _=tokio::time::sleep(Duration::from_secs(1)),if awake && (!locked||failed)=>{}
         }
     }
 }
