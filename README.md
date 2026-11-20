@@ -89,6 +89,19 @@ colors = [[255, 0, 128]]
 
 Some N4 Pro-family devices (N4 Pro, N4 Pro E, VSDInside N4 Pro) vibrate on key press. Set `vibration = false` in `config.toml` to silence it, `true` to explicitly enable it, or omit the field to leave the current setting alone. The setting is applied on each connect. Devices that don't expose the config command in their firmware will log a warning and skip it.
 
+### Experimental continuous strip
+
+The plugin enables the full-width strip when it can read a firmware version that meets the device's minimum.
+
+| Device | USB VID:PID | Minimum firmware | Full-width image slot |
+| --- | --- | --- | --- |
+| Mirabox N4E | `6603:1007` | `02.014` | `BAT` wire slot 4 |
+| Streonor S10 Pro | `1500:3007` | `02.017` | `BAT` wire slot 5 |
+
+Set `bgpic = true` in `config.toml` to try `BGPIC` on any supported deck. Set `bgpic = false` or omit it to use image slots. The plugin reads the setting on connect.
+
+When reporting results, include your USB VID:PID, exact firmware version, and where the strip image appeared. The plugin logs the USB ID and any firmware version MiraJazz can read when it enables the renderer. If the version is missing or truncated, include the full version from the device or the vendor app.
+
 ## Adding new devices
 
 Read [this wiki page](https://github.com/4ndv/opendeck-akp03/wiki/Adding-support-for-new-devices) for more information.

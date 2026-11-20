@@ -10,6 +10,8 @@ pub struct Config {
     /// `None` — no vibration command sent; `Some(true|false)` — enable/disable
     /// on connect. Only applied on devices whose firmware supports it.
     pub vibration: Option<bool>,
+    /// Override automatic BGPIC selection for connected devices.
+    pub bgpic: Option<bool>,
     pub leds: LedConfig,
 }
 

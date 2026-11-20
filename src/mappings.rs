@@ -12,8 +12,11 @@ pub const KEY_COUNT: usize = 15;
 pub const ENCODER_COUNT: usize = 4;
 pub const DEVICE_TYPE: u8 = 7; // StreamDeckPlus
 
-/// Device image index of the full-width touch strip (wire slot 5), see [`Kind::full_strip_format`]
-pub const FULL_STRIP_INDEX: u8 = 4;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FullStrip {
+    ImageSlot(u8),
+    Bgpic,
+}
 
 #[derive(Debug, Clone)]
 pub enum Kind {
@@ -222,23 +225,18 @@ impl Kind {
         }
     }
 
-    /// Image format for devices whose touch strip has a full-width image slot.
-    ///
-    /// The four per-knob tiles (slots 1-4, 176x112 each) sit on the panel with
-    /// dark gaps between them. Device index 4 (wire slot 5), which the per-key
-    /// mapping never uses, takes a single 800x128 image covering the whole
-    /// strip edge to edge. Found by testing on a Streonor S10 Pro (firmware
-    /// V3.S10.02.017); other N4-family devices are untested, so opt-in per kind.
-    pub fn full_strip_format(&self) -> Option<ImageFormat> {
-        match self {
-            Self::StreonorS10Pro => Some(ImageFormat {
-                mode: ImageMode::JPEG,
-                size: (800, 128),
-                rotation: ImageRotation::Rot180,
-                mirror: ImageMirroring::None,
-            }),
-            _ => None,
+    pub fn full_strip(&self, firmware: Option<&str>, bgpic: Option<bool>) -> Option<FullStrip> {
+        if bgpic == Some(true) {
+            return Some(FullStrip::Bgpic);
         }
+        let (minimum, index) = match self {
+            // BAT wire slot 4, tested on V3.Mbox_N4E.02.014 and V3.Mbox_N4E_HJDF.02.018.
+            Self::N4E => ((2, 14), 3),
+            // BAT wire slot 5, tested on V3.S10.02.017 by the PR #29 author.
+            Self::StreonorS10Pro => ((2, 17), 4),
+            _ => return None,
+        };
+        (strip_firmware_version(firmware?)? >= minimum).then_some(FullStrip::ImageSlot(index))
     }
 
     pub fn supports_both_encoder_states(&self) -> bool {
@@ -251,6 +249,65 @@ impl Kind {
     /// Mirabox's official SDK (`streamdockN4Pro.h`).
     pub fn supports_vibration(&self) -> bool {
         matches!(self, Self::N4Pro | Self::N4ProE | Self::VsdN4Pro)
+    }
+}
+
+fn strip_firmware_version(firmware: &str) -> Option<(u8, u16)> {
+    let (family_and_series, build) = firmware.trim_end_matches('\0').rsplit_once('.')?;
+    let (family, series) = family_and_series.rsplit_once('.')?;
+    if family.strip_prefix("V3.")?.is_empty()
+        || series.len() != 2
+        || build.len() != 3
+        || !series
+            .bytes()
+            .chain(build.bytes())
+            .all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some((series.parse().ok()?, build.parse().ok()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FullStrip, Kind};
+
+    #[test]
+    fn selects_full_strip_by_device_firmware_and_override() {
+        let n4e_slot = Some(FullStrip::ImageSlot(3));
+        let s10_slot = Some(FullStrip::ImageSlot(4));
+        let bgpic = Some(FullStrip::Bgpic);
+        for (kind, firmware, override_bgpic, expected) in [
+            (Kind::N4E, Some("V3.293N4E.01.999"), None, None),
+            (Kind::N4E, Some("V3.Mbox_N4E.02.013"), None, None),
+            (Kind::N4E, Some("V3.Mbox_N4E.02.014"), None, n4e_slot),
+            (
+                Kind::N4E,
+                Some("V3.Mbox_N4E_HJDF.02.018\0"),
+                Some(false),
+                n4e_slot,
+            ),
+            (Kind::N4E, Some("V3.Mbox_N4E_HJDF.02."), None, None),
+            (Kind::N4E, Some("V3.Mbox_N4E.02.+14"), None, None),
+            (Kind::StreonorS10Pro, Some("V3.S10.02.016"), None, None),
+            (Kind::StreonorS10Pro, Some("V3.S10.02.017"), None, s10_slot),
+            (Kind::StreonorS10Pro, Some("V3.S10.02.018"), None, s10_slot),
+            (Kind::StreonorS10Pro, None, None, None),
+            (
+                Kind::StreonorS10Pro,
+                Some("V3.S10.02.017"),
+                Some(true),
+                bgpic,
+            ),
+            (Kind::VsdN4Pro, Some("V3.S10.02.017"), None, None),
+            (Kind::VsdN4Pro, None, Some(true), bgpic),
+        ] {
+            assert_eq!(
+                kind.full_strip(firmware, override_bgpic),
+                expected,
+                "{kind:?} {firmware:?} {override_bgpic:?}"
+            );
+        }
     }
 }
 

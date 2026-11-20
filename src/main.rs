@@ -1,4 +1,3 @@
-use device::handle_set_image;
 use managed_device::ManagedDevice;
 use openaction::{
     OpenActionResult, async_trait,
@@ -71,10 +70,7 @@ impl openaction::global_events::GlobalEventHandler for GlobalEventHandler {
 
         let device = DEVICES.read().await.get(&event.device).cloned();
         if let Some(device) = device {
-            if let Err(err) = device
-                .with_awake_device(async |device| handle_set_image(device, event).await)
-                .await
-            {
+            if let Err(err) = device.set_image(event).await {
                 device.handle_error(&id, err);
             }
         } else {

@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
 use mirajazz::{device::Device, error::MirajazzError, state::DeviceStateReader};
+use openaction::global_events::SetImageEvent;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+
+use crate::device::{StripCanvas, handle_set_image};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PowerState {
@@ -15,14 +18,16 @@ pub struct ManagedDevice<D = Device> {
     device: D,
     power: Mutex<PowerState>,
     cancel: CancellationToken,
+    strip: Option<StripCanvas>,
 }
 
 impl<D> ManagedDevice<D> {
-    pub fn new(device: D, cancel: CancellationToken) -> Self {
+    pub fn new(device: D, cancel: CancellationToken, strip: Option<StripCanvas>) -> Self {
         Self {
             device,
             power: Mutex::new(PowerState::Awake),
             cancel,
+            strip,
         }
     }
 
@@ -72,6 +77,13 @@ impl<D> ManagedDevice<D> {
 }
 
 impl ManagedDevice {
+    pub async fn set_image(&self, event: SetImageEvent) -> Result<(), MirajazzError> {
+        self.with_awake_device(async |device| {
+            handle_set_image(device, event, self.strip.as_ref()).await
+        })
+        .await
+    }
+
     pub async fn set_brightness(&self, brightness: u8) -> Result<(), MirajazzError> {
         // LIG 0 leaves these panels lit. HAN sleeps them; nonzero LIG wakes them.
         if brightness == 0 {
@@ -105,7 +117,7 @@ mod tests {
     #[tokio::test]
     async fn cancellation_releases_inflight_and_queued_commands() {
         let cancel = CancellationToken::new();
-        let device = ManagedDevice::new((), cancel.clone());
+        let device = ManagedDevice::new((), cancel.clone(), None);
         let mut inflight = pin!(device.with_awake_device(async |_| {
             std::future::pending::<Result<(), MirajazzError>>().await
         }));
@@ -127,7 +139,7 @@ mod tests {
 
     #[tokio::test]
     async fn sleep_waits_for_inflight_command_and_blocks_queued_commands() {
-        let device = ManagedDevice::new(Mutex::new(Vec::new()), CancellationToken::new());
+        let device = ManagedDevice::new(Mutex::new(Vec::new()), CancellationToken::new(), None);
         let (finish, finished) = oneshot::channel();
         let mut command = pin!(device.with_awake_device(async |events| {
             events.lock().await.push("keepalive started");
