@@ -1,6 +1,7 @@
 [licenses]
 allow = [
   "MIT",
+  "CC0-1.0",
   "ISC",
   "Zlib",
   "MPL-2.0",
