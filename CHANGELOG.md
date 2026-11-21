@@ -2,9 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.12.0] - 2026-11-21
 
-Draw the Streonor S10 Pro touch strip as one continuous image, without gaps between the knob segments
+- Render a continuous touch bar on the Mirabox N4E from firmware `02.014` and on the Streonor S10 Pro from `02.017` (#29). Set `bgpic = true` to test other devices.
+- Preserve the aspect ratio of rotary dial images and log the firmware version used for strip selection.
+- Sleep and wake the hardware when OpenDeck changes display power. Reconnect USB devices after system resume (#21, #23).
+- Ship a static Linux executable, a Windows x86-64 executable, and a universal macOS executable built with Nix.
 
 ## [0.11.1] - 2026-10-20
 
