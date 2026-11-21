@@ -47,6 +47,11 @@ Create `~/.config/opendeck-akp05/config.toml`.
 (Windows: `%APPDATA%\opendeck-akp05\config.toml`, macOS: `~/Library/Application Support/opendeck-akp05/config.toml`)
 
 ```toml
+# Uncomment to test the experimental full-width touch bar on your deck.
+# Please report your USB VID:PID, exact firmware version, and result.
+# See "Report a compatibility test" below for how to find them.
+# bgpic = true
+
 # N4 Pro-family only. Omit to leave the device's current setting alone.
 vibration = false
 
@@ -98,9 +103,23 @@ The plugin enables the full-width strip when it can read a firmware version that
 | Mirabox N4E | `6603:1007` | `02.014` | `BAT` wire slot 4 |
 | Streonor S10 Pro | `1500:3007` | `02.017` | `BAT` wire slot 5 |
 
-Set `bgpic = true` in `config.toml` to try `BGPIC` on any supported deck. Set `bgpic = false` or omit it to use image slots. The plugin reads the setting on connect.
+Set `bgpic = true` at the top level of `config.toml` to try the experimental `BGPIC` renderer on any deck recognized by the plugin. Restart OpenDeck or reconnect the deck to apply the setting. Set `bgpic = false` or omit it to use image slots.
 
-When reporting results, include your USB VID:PID, exact firmware version, and where the strip image appeared. The plugin logs the USB ID and any firmware version MiraJazz can read when it enables the renderer. If the version is missing or truncated, include the full version from the device or the vendor app.
+#### Report a compatibility test
+
+1. Enable `bgpic`, restart OpenDeck, and test an action on the touch bar. Note whether the rotary dial images appear in the right place, are clipped, or are missing.
+2. In OpenDeck, choose **Settings → Open logs**. Open `plugins/com.github.ambiso.opendeck-akp05.sdPlugin.log` and copy the line beginning with `Using full-width touch strip`. It contains the USB VID:PID and firmware version when available, for example `6603:1007, firmware V3.Mbox_N4E.02.014`. The default log level includes this line.
+3. On Windows, the plugin reports `firmware unknown`. With the deck connected, open VSD Craft or Stream Dock and copy the current firmware version from **Settings → Device**. Close the vendor app before testing in OpenDeck.
+4. [Open a compatibility report](https://github.com/ambiso/opendeck-akp05/issues/new) with the log line, any firmware version you looked up separately, and what appeared on the touch bar.
+
+On Linux, you can also find the log line from a terminal:
+
+```sh
+grep -F 'Using full-width touch strip' \
+    "${XDG_DATA_HOME:-$HOME/.local/share}/opendeck/logs/plugins/com.github.ambiso.opendeck-akp05.sdPlugin.log"
+```
+
+If the plugin did not log the device, run `lsusb` with the deck connected and copy the value after `ID` on its entry. If the entry is ambiguous, compare the output with the deck unplugged.
 
 ## Adding new devices
 
