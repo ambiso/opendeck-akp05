@@ -57,7 +57,7 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
             );
         }
 
-        let strip = full_strip.map(|mode| StripCanvas::new(mode, cfg.auto_crop.unwrap_or(true)));
+        let strip = full_strip.map(|mode| StripCanvas::new(mode, cfg.auto_crop));
         device.set_brightness(50).await?;
         clear_display(&device, strip.as_ref()).await?;
 
@@ -334,7 +334,7 @@ pub struct StripCanvas {
 
 impl StripCanvas {
     fn new(mode: FullStrip, auto_crop: bool) -> Self {
-        let (width, height) = mode.geometry().size;
+        let (width, height) = mode.size();
         Self {
             mode,
             auto_crop,
@@ -349,15 +349,12 @@ impl StripCanvas {
             return Err(MirajazzError::BadData);
         }
 
-        let geometry = self.mode.geometry();
-        let (strip_width, strip_height) = geometry.size;
+        let (strip_width, height) = self.mode.size();
         let width = strip_width / ENCODER_COUNT;
-        // Draw only in the rows that can be seen; the hidden rows stay black.
-        let height = strip_height - geometry.hidden_top;
         let tile = match image {
             Some(image) => {
                 let image = if self.auto_crop {
-                    crop_side_padding(image)
+                    crop_padding(image)
                 } else {
                     image
                 };
@@ -366,12 +363,7 @@ impl StripCanvas {
             None => RgbImage::new(width as u32, height as u32),
         };
         let mut pixels = self.pixels.lock().unwrap();
-        image::imageops::replace(
-            &mut *pixels,
-            &tile,
-            (dial * width) as i64,
-            geometry.hidden_top as i64,
-        );
+        image::imageops::replace(&mut *pixels, &tile, (dial * width) as i64, 0);
         Ok(DynamicImage::ImageRgb8(pixels.clone()))
     }
 
@@ -385,7 +377,7 @@ impl StripCanvas {
         match self.mode {
             FullStrip::ImageSlot(index) => {
                 device
-                    .set_button_image(index, full_strip_format(self.mode.geometry().size), image)
+                    .set_button_image(index, full_strip_format(self.mode.size()), image)
                     .await?;
                 device.flush().await
             }
@@ -435,10 +427,10 @@ async fn send_strip_bgpic(device: &Device, image: DynamicImage) -> Result<(), Mi
         .await
 }
 
-/// Look for symmetric, nearly black side bars with a sustained edge on both sides.
-fn crop_side_padding(image: DynamicImage) -> DynamicImage {
+/// Remove matching dark margins around the artwork while preserving its aspect ratio.
+fn crop_padding(image: DynamicImage) -> DynamicImage {
     let (width, height) = image.dimensions();
-    if width <= height || height == 0 {
+    if width == 0 || height == 0 {
         return image;
     }
 
@@ -447,39 +439,53 @@ fn crop_side_padding(image: DynamicImage) -> DynamicImage {
         let [red, green, blue] = rgb.get_pixel(x, y).0;
         red.max(green).max(blue)
     };
-    // Allow faint JPEG noise in a bar while rejecting bright details and dark gradients.
-    let is_padding = |&x: &u32| {
-        let (peak, sum) = (0..height)
-            .map(|y| level(x, y))
+    let horizontal = matching_padding(width, height, level);
+    let content_width = width - 2 * horizontal;
+    let vertical = matching_padding(height, content_width, |y, x| level(x + horizontal, y));
+    if horizontal == 0 && vertical == 0 {
+        return image;
+    }
+    image.crop_imm(horizontal, vertical, content_width, height - 2 * vertical)
+}
+
+/// Find equal margins on one axis, with a sustained image edge just inside each margin.
+fn matching_padding(length: u32, line_length: u32, level: impl Fn(u32, u32) -> u8) -> u32 {
+    // Allow faint JPEG noise in a margin while rejecting bright details and dark gradients.
+    let is_padding = |&position: &u32| {
+        let (peak, sum) = (0..line_length)
+            .map(|sample| level(position, sample))
             .fold((0, 0u64), |(peak, sum), value| {
                 (peak.max(value), sum + u64::from(value))
             });
-        peak <= 24 && sum <= 8 * u64::from(height)
+        peak <= 24 && sum <= 8 * u64::from(line_length)
     };
-    let left = (0..width).take_while(is_padding).count() as u32;
-    let right = (left..width).rev().take_while(is_padding).count() as u32;
-    let padding = left.min(right);
-    let content_width = width - left - right;
-    let min_edge_length = height.saturating_mul(2).div_ceil(3);
-    if padding < width.div_ceil(20)
-        || left.abs_diff(right) > width.div_ceil(50)
-        || content_width < min_edge_length
+    let start = (0..length).take_while(is_padding).count() as u32;
+    let end = (start..length).rev().take_while(is_padding).count() as u32;
+    let content_length = length - start - end;
+    let padding = start.min(end);
+    if padding < length.div_ceil(20)
+        || start.abs_diff(end) > length.div_ceil(50)
+        || content_length < length.min(line_length).saturating_mul(2).div_ceil(3)
     {
-        return image;
+        return 0;
     }
 
-    // A lone label or a horizontal progress bar rarely has a tall edge on both sides.
-    let edge_width = height.div_ceil(20).min(content_width / 2);
-    let has_edge = |columns: std::ops::Range<u32>| {
-        let rows = (0..height)
-            .filter(|&y| columns.clone().any(|x| level(x, y) > 24))
+    // A lone label or unframed progress bar rarely has a long edge on both sides.
+    let edge_depth = line_length.div_ceil(20).min(content_length / 2);
+    let has_edge = |positions: std::ops::Range<u32>| {
+        let samples = (0..line_length)
+            .filter(|&sample| {
+                positions
+                    .clone()
+                    .any(|position| level(position, sample) > 24)
+            })
             .count() as u32;
-        rows >= min_edge_length
+        samples >= line_length.saturating_mul(2).div_ceil(3)
     };
-    if has_edge(left..left + edge_width) && has_edge(width - right - edge_width..width - right) {
-        image.crop_imm(padding, 0, width - 2 * padding, height)
+    if has_edge(start..start + edge_depth) && has_edge(length - end - edge_depth..length - end) {
+        padding
     } else {
-        image
+        0
     }
 }
 
@@ -524,60 +530,46 @@ mod tests {
                 background
             }
         });
-        let strip = StripCanvas::new(FullStrip::ImageSlot(3), true);
-        let frame = strip
-            .update(1, Some(DynamicImage::ImageRgb8(image.clone())))
-            .unwrap()
-            .into_rgb8();
+        for (mode, height, top) in [
+            (FullStrip::ImageSlot(3), 128, 14),
+            (FullStrip::PanelBgpic, 130, 15),
+        ] {
+            let strip = StripCanvas::new(mode, true);
+            let frame = strip
+                .update(1, Some(DynamicImage::ImageRgb8(image.clone())))
+                .unwrap()
+                .into_rgb8();
 
-        let rendered = frame.view(200, 14, 200, 100).to_image();
-        assert_eq!(rendered, image);
-        for (x, y) in [(200, 13), (399, 114), (199, 64), (400, 64)] {
-            assert_eq!(frame.get_pixel(x, y), &Rgb([0, 0, 0]));
+            assert_eq!(frame.dimensions(), (800, height));
+            assert_eq!(frame.view(200, top, 200, 100).to_image(), image);
+            for (x, y) in [(200, top - 1), (399, top + 100), (199, 64), (400, 64)] {
+                assert_eq!(frame.get_pixel(x, y), &Rgb([0, 0, 0]));
+            }
         }
     }
 
     #[test]
-    fn panel_strip_draws_below_the_bezel() {
-        let image = RgbImage::from_pixel(200, 100, Rgb([0, 0, 255]));
-        let strip = StripCanvas::new(FullStrip::PanelBgpic, true);
-        let frame = strip
-            .update(2, Some(DynamicImage::ImageRgb8(image.clone())))
-            .unwrap()
-            .into_rgb8();
-
-        assert_eq!(frame.dimensions(), (800, 160));
-        // Visible rows are 24..160 (136 tall); a 200x100 tile centres at y = 24 + 18.
-        assert_eq!(frame.view(400, 42, 200, 100).to_image(), image);
-        for (x, y) in [(400, 41), (599, 142), (399, 90), (600, 90), (500, 0)] {
-            assert_eq!(frame.get_pixel(x, y), &Rgb([0, 0, 0]));
-        }
-    }
-
-    #[test]
-    fn panel_strip_scales_letterboxed_square_to_full_height() {
-        // OpenDeck's render of a square icon: 100x100 content centred in 200x100.
-        let content = Rgb([200, 100, 50]);
-        let image = RgbImage::from_fn(200, 100, |x, _| {
-            if (50..150).contains(&x) {
-                content
+    fn full_strip_scales_padded_square_to_fill_height() {
+        // OpenDeck's fallback path centres an icon of up to 72x72 in its 200x100 canvas.
+        let image = RgbImage::from_fn(200, 100, |x, y| {
+            if (64..136).contains(&x) && (14..86).contains(&y) {
+                Rgb([200, 100, 50])
             } else {
                 Rgb([0, 0, 0])
             }
         });
-        let strip = StripCanvas::new(FullStrip::PanelBgpic, true);
-        let frame = strip
-            .update(0, Some(DynamicImage::ImageRgb8(image)))
-            .unwrap()
-            .into_rgb8();
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+            .encode_image(&image)
+            .unwrap();
+        let image = load_from_memory_with_format(&jpeg, image::ImageFormat::Jpeg).unwrap();
 
-        // Scaled to 136x136, centred in the 200-wide tile (x 32..168), rows 24..160.
-        for (x, y) in [(32, 24), (167, 24), (32, 159), (167, 159), (100, 90)] {
-            assert_eq!(frame.get_pixel(x, y), &content, "({x},{y})");
-        }
-        for (x, y) in [(31, 90), (168, 90), (100, 23)] {
-            assert_eq!(frame.get_pixel(x, y), &Rgb([0, 0, 0]), "({x},{y})");
-        }
+        let strip = StripCanvas::new(FullStrip::ImageSlot(3), true);
+        let frame = strip.update(0, Some(image)).unwrap().into_rgb8();
+
+        // A side-only crop leaves the icon about 92 rows tall. Check near both edges.
+        assert!(frame.get_pixel(100, 5)[0] > 128);
+        assert!(frame.get_pixel(100, 122)[0] > 128);
     }
 
     #[test]
@@ -597,12 +589,12 @@ mod tests {
                 .update(0, Some(DynamicImage::ImageRgb8(image.clone())))
                 .unwrap()
                 .into_rgb8();
-            assert_eq!(frame.view(0, 42, 200, 100).to_image(), image);
+            assert_eq!(frame.view(0, 15, 200, 100).to_image(), image);
         }
     }
 
     #[test]
-    fn disabling_auto_crop_preserves_side_padding() {
+    fn disabling_auto_crop_preserves_padding() {
         let image = RgbImage::from_fn(200, 100, |x, _| {
             if (50..150).contains(&x) {
                 Rgb([200, 100, 50])
@@ -615,6 +607,6 @@ mod tests {
             .update(0, Some(DynamicImage::ImageRgb8(image.clone())))
             .unwrap()
             .into_rgb8();
-        assert_eq!(frame.view(0, 42, 200, 100).to_image(), image);
+        assert_eq!(frame.view(0, 15, 200, 100).to_image(), image);
     }
 }

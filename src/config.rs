@@ -12,8 +12,8 @@ pub struct Config {
     pub vibration: Option<bool>,
     /// Override automatic BGPIC selection for connected devices.
     pub bgpic: Option<bool>,
-    /// Remove detected side padding from full-width strip images by default.
-    pub auto_crop: Option<bool>,
+    /// Remove detected padding from full-width strip images when enabled.
+    pub auto_crop: bool,
     pub leds: LedConfig,
 }
 

@@ -52,8 +52,8 @@ Create `~/.config/opendeck-akp05/config.toml`.
 # See "Report a compatibility test" below for how to find them.
 # bgpic = true
 
-# Uncomment to preserve the original dial image margins on full-width strips.
-# auto_crop = false
+# Uncomment to try cropping dark padding on full-width strips.
+# auto_crop = true
 
 # N4 Pro-family only. Omit to leave the device's current setting alone.
 vibration = false
@@ -101,17 +101,15 @@ Some N4 Pro-family devices (N4 Pro, N4 Pro E, VSDInside N4 Pro) vibrate on key p
 
 The plugin enables the full-width strip when it can read a firmware version that meets the device's minimum.
 
-| Device | USB VID:PID | Minimum firmware | Full-width image slot |
+| Device | USB VID:PID | Minimum firmware | Full-width image command |
 | --- | --- | --- | --- |
 | Mirabox N4E | `6603:1007` | `02.014` | `BAT` wire slot 4 |
 | Streonor S10 Pro | `1500:3007` | `02.017` | `BAT` wire slot 5 |
-| VSDInside N4 Pro | `5548:1023` | `02.010` | `BGPIC` 800×160, panel rows 320–479 |
-
-The VSDInside N4 Pro draws its keys and touch strip on one 800×480 panel. The strip is the panel's bottom 160 rows, and about the top 24 of those sit behind the bezel, so dial images are drawn in the visible 800×136 area.
+| VSDInside N4 Pro | `5548:1023` | `02.010` | `BGPIC` 800×130 |
 
 Set `bgpic = true` at the top level of `config.toml` to try `BGPIC` on any deck recognized by the plugin, including when the firmware version is unavailable. Set `bgpic = false` to disable `BGPIC` or omit it to use the firmware rules above. Restart OpenDeck or reconnect the deck to apply the setting.
 
-On full-width strips, the plugin crops dark side padding when it detects matching margins and a clear edge on both sides. Set `auto_crop = false` at the top level of `config.toml` to preserve the full OpenDeck image for every connected device. Restart OpenDeck or reconnect the deck to apply the setting.
+Set `auto_crop = true` at the top level of `config.toml` to try removing dark padding on full-width strips. It looks for matching margins and a clear edge on opposing sides. Cropping is off by default because changing dial artwork can change the detected margins. Restart OpenDeck or reconnect the deck to apply the setting.
 
 #### Report a compatibility test
 

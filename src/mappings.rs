@@ -16,34 +16,15 @@ pub const DEVICE_TYPE: u8 = 7; // StreamDeckPlus
 pub enum FullStrip {
     ImageSlot(u8),
     Bgpic,
-    /// N4 Pro-family panel: keys and strip share one 800x480 screen, and the
-    /// touch strip is its bottom 160 rows. Drawn with BGPIC at the panel's
-    /// strip area; the top rows sit behind the bezel.
+    /// N4 Pro panel that uses the vendor app's 800x130 BGPIC frame size.
     PanelBgpic,
 }
 
-/// Size of the full-strip canvas and which of its rows can be seen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StripGeometry {
-    pub size: (usize, usize),
-    /// Rows hidden behind the bezel at the top of the canvas.
-    pub hidden_top: usize,
-}
-
 impl FullStrip {
-    pub fn geometry(&self) -> StripGeometry {
+    pub fn size(&self) -> (usize, usize) {
         match self {
-            Self::ImageSlot(_) | Self::Bgpic => StripGeometry {
-                size: (800, 128),
-                hidden_top: 0,
-            },
-            // Measured on a VSDInside N4 Pro (5548:1023, V4.VSD N4 Pro.02.010):
-            // panel rows 320-479 land in the strip window, and roughly the
-            // first 24 of those are covered by the bezel.
-            Self::PanelBgpic => StripGeometry {
-                size: (800, 160),
-                hidden_top: 24,
-            },
+            Self::ImageSlot(_) | Self::Bgpic => (800, 128),
+            Self::PanelBgpic => (800, 130),
         }
     }
 
@@ -271,7 +252,7 @@ impl Kind {
             Self::N4E => ("V3.", (2, 14), FullStrip::ImageSlot(3)),
             // BAT wire slot 5, tested on V3.S10.02.017 by the PR #29 author.
             Self::StreonorS10Pro => ("V3.", (2, 17), FullStrip::ImageSlot(4)),
-            // Panel BGPIC tested on V4.VSD N4 Pro.02.010 by the PR #31 author.
+            // PR #31 confirmed BGPIC support on V4.VSD N4 Pro.02.010.
             Self::VsdN4Pro => ("V4.", (2, 10), FullStrip::PanelBgpic),
             _ => return None,
         };
