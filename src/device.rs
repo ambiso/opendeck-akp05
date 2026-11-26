@@ -25,12 +25,14 @@ use crate::{
     },
 };
 
-const FULL_STRIP_FORMAT: ImageFormat = ImageFormat {
-    mode: ImageMode::JPEG,
-    size: (800, 128),
-    rotation: ImageRotation::Rot180,
-    mirror: ImageMirroring::None,
-};
+fn full_strip_format(size: (usize, usize)) -> ImageFormat {
+    ImageFormat {
+        mode: ImageMode::JPEG,
+        size,
+        rotation: ImageRotation::Rot180,
+        mirror: ImageMirroring::None,
+    }
+}
 
 /// Initializes a device and listens for events
 pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
@@ -329,7 +331,7 @@ pub struct StripCanvas {
 
 impl StripCanvas {
     fn new(mode: FullStrip) -> Self {
-        let (width, height) = FULL_STRIP_FORMAT.size;
+        let (width, height) = mode.geometry().size;
         Self {
             mode,
             pixels: Mutex::new(RgbImage::new(width as u32, height as u32)),
@@ -343,14 +345,28 @@ impl StripCanvas {
             return Err(MirajazzError::BadData);
         }
 
-        let (strip_width, height) = FULL_STRIP_FORMAT.size;
+        let geometry = self.mode.geometry();
+        let (strip_width, strip_height) = geometry.size;
         let width = strip_width / ENCODER_COUNT;
+        // Draw only in the rows that can be seen; the hidden rows stay black.
+        let height = strip_height - geometry.hidden_top;
         let tile = match image {
+            // OpenDeck letterboxes square images inside its 200x100 dial
+            // render. On the taller panel strip, trim that padding so the
+            // image can scale up to the full visible height.
+            Some(image) if self.mode == FullStrip::PanelBgpic => {
+                fit_into(trim_uniform_border(image), (width, height)).into_rgb8()
+            }
             Some(image) => fit_into(image, (width, height)).into_rgb8(),
             None => RgbImage::new(width as u32, height as u32),
         };
         let mut pixels = self.pixels.lock().unwrap();
-        image::imageops::replace(&mut *pixels, &tile, (dial * width) as i64, 0);
+        image::imageops::replace(
+            &mut *pixels,
+            &tile,
+            (dial * width) as i64,
+            geometry.hidden_top as i64,
+        );
         Ok(DynamicImage::ImageRgb8(pixels.clone()))
     }
 
@@ -364,11 +380,11 @@ impl StripCanvas {
         match self.mode {
             FullStrip::ImageSlot(index) => {
                 device
-                    .set_button_image(index, FULL_STRIP_FORMAT, image)
+                    .set_button_image(index, full_strip_format(self.mode.geometry().size), image)
                     .await?;
                 device.flush().await
             }
-            FullStrip::Bgpic => send_strip_bgpic(device, image).await,
+            FullStrip::Bgpic | FullStrip::PanelBgpic => send_strip_bgpic(device, image).await,
         }
     }
 }
@@ -377,7 +393,10 @@ async fn clear_display(device: &Device, strip: Option<&StripCanvas>) -> Result<(
     let background = strip.and_then(|strip| {
         let mut pixels = strip.pixels.lock().unwrap();
         pixels.fill(0);
-        (strip.mode == FullStrip::Bgpic).then(|| DynamicImage::ImageRgb8(pixels.clone()))
+        strip
+            .mode
+            .uses_bgpic()
+            .then(|| DynamicImage::ImageRgb8(pixels.clone()))
     });
     device.clear_all_button_images().await?;
     if let Some(background) = background {
@@ -387,9 +406,9 @@ async fn clear_display(device: &Device, strip: Option<&StripCanvas>) -> Result<(
 }
 
 async fn send_strip_bgpic(device: &Device, image: DynamicImage) -> Result<(), MirajazzError> {
-    let jpeg = convert_image_with_format(FULL_STRIP_FORMAT, image).await?;
+    let (width, height) = (image.width() as usize, image.height() as usize);
+    let jpeg = convert_image_with_format(full_strip_format((width, height)), image).await?;
     let len = u32::try_from(jpeg.len()).map_err(|_| MirajazzError::BadData)?;
-    let (width, height) = FULL_STRIP_FORMAT.size;
     let mut report = b"\0CRT\0\0BGPIC".to_vec();
     report.extend_from_slice(&len.to_be_bytes());
     // BGPIC encodes x, y, width and height as big-endian u16s, then 0 and the layer.
@@ -409,6 +428,39 @@ async fn send_strip_bgpic(device: &Device, image: DynamicImage) -> Result<(), Mi
     device
         .write_extended_data(&mut b"\0CRT\0\0STP".to_vec())
         .await
+}
+
+/// Crop away a border of the image's top-left corner colour (within a small
+/// tolerance, since OpenDeck's render is JPEG-compressed). Returns the image
+/// unchanged when nothing differs from that colour.
+fn trim_uniform_border(image: DynamicImage) -> DynamicImage {
+    const TOLERANCE: i16 = 24;
+    let rgb = image.to_rgb8();
+    let (w, h) = rgb.dimensions();
+    if w == 0 || h == 0 {
+        return image;
+    }
+    let corner = *rgb.get_pixel(0, 0);
+    let differs = |x: u32, y: u32| {
+        let p = rgb.get_pixel(x, y);
+        (0..3).any(|c| (i16::from(p[c]) - i16::from(corner[c])).abs() > TOLERANCE)
+    };
+
+    let (mut left, mut top, mut right, mut bottom) = (w, h, 0, 0);
+    for y in 0..h {
+        for x in 0..w {
+            if differs(x, y) {
+                left = left.min(x);
+                right = right.max(x);
+                top = top.min(y);
+                bottom = bottom.max(y);
+            }
+        }
+    }
+    if left > right || top > bottom {
+        return image;
+    }
+    image.crop_imm(left, top, right - left + 1, bottom - top + 1)
 }
 
 /// Fit `image` inside `size` preserving aspect ratio, with black padding.
@@ -465,5 +517,54 @@ mod tests {
         for (x, y) in [(200, 13), (399, 114), (199, 64), (400, 64)] {
             assert_eq!(frame.get_pixel(x, y), &Rgb([0, 0, 0]));
         }
+    }
+
+    #[test]
+    fn panel_strip_draws_below_the_bezel() {
+        let image = RgbImage::from_pixel(200, 100, Rgb([0, 0, 255]));
+        let strip = StripCanvas::new(FullStrip::PanelBgpic);
+        let frame = strip
+            .update(2, Some(DynamicImage::ImageRgb8(image.clone())))
+            .unwrap()
+            .into_rgb8();
+
+        assert_eq!(frame.dimensions(), (800, 160));
+        // Visible rows are 24..160 (136 tall); a 200x100 tile centres at y = 24 + 18.
+        assert_eq!(frame.view(400, 42, 200, 100).to_image(), image);
+        for (x, y) in [(400, 41), (599, 142), (399, 90), (600, 90), (500, 0)] {
+            assert_eq!(frame.get_pixel(x, y), &Rgb([0, 0, 0]));
+        }
+    }
+
+    #[test]
+    fn panel_strip_scales_letterboxed_square_to_full_height() {
+        // OpenDeck's render of a square icon: 100x100 content centred in 200x100.
+        let content = Rgb([200, 100, 50]);
+        let image = RgbImage::from_fn(200, 100, |x, _| {
+            if (50..150).contains(&x) {
+                content
+            } else {
+                Rgb([0, 0, 0])
+            }
+        });
+        let strip = StripCanvas::new(FullStrip::PanelBgpic);
+        let frame = strip
+            .update(0, Some(DynamicImage::ImageRgb8(image)))
+            .unwrap()
+            .into_rgb8();
+
+        // Scaled to 136x136, centred in the 200-wide tile (x 32..168), rows 24..160.
+        for (x, y) in [(32, 24), (167, 24), (32, 159), (167, 159), (100, 90)] {
+            assert_eq!(frame.get_pixel(x, y), &content, "({x},{y})");
+        }
+        for (x, y) in [(31, 90), (168, 90), (100, 23)] {
+            assert_eq!(frame.get_pixel(x, y), &Rgb([0, 0, 0]), "({x},{y})");
+        }
+    }
+
+    #[test]
+    fn trim_leaves_uniform_images_alone() {
+        let image = DynamicImage::ImageRgb8(RgbImage::from_pixel(200, 100, Rgb([0, 0, 0])));
+        assert_eq!(trim_uniform_border(image).dimensions(), (200, 100));
     }
 }
