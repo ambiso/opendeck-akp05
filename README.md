@@ -52,6 +52,9 @@ Create `~/.config/opendeck-akp05/config.toml`.
 # See "Report a compatibility test" below for how to find them.
 # bgpic = true
 
+# Uncomment to preserve the original dial image margins on full-width strips.
+# auto_crop = false
+
 # N4 Pro-family only. Omit to leave the device's current setting alone.
 vibration = false
 
@@ -107,6 +110,8 @@ The plugin enables the full-width strip when it can read a firmware version that
 The VSDInside N4 Pro draws its keys and touch strip on one 800×480 panel. The strip is the panel's bottom 160 rows, and about the top 24 of those sit behind the bezel, so dial images are drawn in the visible 800×136 area.
 
 Set `bgpic = true` at the top level of `config.toml` to try `BGPIC` on any deck recognized by the plugin, including when the firmware version is unavailable. Set `bgpic = false` to disable `BGPIC` or omit it to use the firmware rules above. Restart OpenDeck or reconnect the deck to apply the setting.
+
+On full-width strips, the plugin crops dark side padding when it detects matching margins and a clear edge on both sides. Set `auto_crop = false` at the top level of `config.toml` to preserve the full OpenDeck image for every connected device. Restart OpenDeck or reconnect the deck to apply the setting.
 
 #### Report a compatibility test
 

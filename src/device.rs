@@ -55,7 +55,7 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
             );
         }
 
-        let strip = full_strip.map(StripCanvas::new);
+        let strip = full_strip.map(|mode| StripCanvas::new(mode, cfg.auto_crop.unwrap_or(true)));
         device.set_brightness(50).await?;
         clear_display(&device, strip.as_ref()).await?;
 
@@ -326,14 +326,16 @@ pub async fn handle_set_image(
 /// One continuous strip canvas per connection, with a quarter for each dial.
 pub struct StripCanvas {
     mode: FullStrip,
+    auto_crop: bool,
     pixels: Mutex<RgbImage>,
 }
 
 impl StripCanvas {
-    fn new(mode: FullStrip) -> Self {
+    fn new(mode: FullStrip, auto_crop: bool) -> Self {
         let (width, height) = mode.geometry().size;
         Self {
             mode,
+            auto_crop,
             pixels: Mutex::new(RgbImage::new(width as u32, height as u32)),
         }
     }
@@ -351,13 +353,14 @@ impl StripCanvas {
         // Draw only in the rows that can be seen; the hidden rows stay black.
         let height = strip_height - geometry.hidden_top;
         let tile = match image {
-            // OpenDeck letterboxes square images inside its 200x100 dial
-            // render. On the taller panel strip, trim that padding so the
-            // image can scale up to the full visible height.
-            Some(image) if self.mode == FullStrip::PanelBgpic => {
-                fit_into(trim_uniform_border(image), (width, height)).into_rgb8()
+            Some(image) => {
+                let image = if self.auto_crop {
+                    crop_side_padding(image)
+                } else {
+                    image
+                };
+                fit_into(image, (width, height)).into_rgb8()
             }
-            Some(image) => fit_into(image, (width, height)).into_rgb8(),
             None => RgbImage::new(width as u32, height as u32),
         };
         let mut pixels = self.pixels.lock().unwrap();
@@ -430,37 +433,52 @@ async fn send_strip_bgpic(device: &Device, image: DynamicImage) -> Result<(), Mi
         .await
 }
 
-/// Crop away a border of the image's top-left corner colour (within a small
-/// tolerance, since OpenDeck's render is JPEG-compressed). Returns the image
-/// unchanged when nothing differs from that colour.
-fn trim_uniform_border(image: DynamicImage) -> DynamicImage {
-    const TOLERANCE: i16 = 24;
-    let rgb = image.to_rgb8();
-    let (w, h) = rgb.dimensions();
-    if w == 0 || h == 0 {
+/// Look for symmetric, nearly black side bars with a sustained edge on both sides.
+fn crop_side_padding(image: DynamicImage) -> DynamicImage {
+    let (width, height) = image.dimensions();
+    if width <= height || height == 0 {
         return image;
     }
-    let corner = *rgb.get_pixel(0, 0);
-    let differs = |x: u32, y: u32| {
-        let p = rgb.get_pixel(x, y);
-        (0..3).any(|c| (i16::from(p[c]) - i16::from(corner[c])).abs() > TOLERANCE)
-    };
 
-    let (mut left, mut top, mut right, mut bottom) = (w, h, 0, 0);
-    for y in 0..h {
-        for x in 0..w {
-            if differs(x, y) {
-                left = left.min(x);
-                right = right.max(x);
-                top = top.min(y);
-                bottom = bottom.max(y);
-            }
-        }
-    }
-    if left > right || top > bottom {
+    let rgb = image.to_rgb8();
+    let level = |x, y| {
+        let [red, green, blue] = rgb.get_pixel(x, y).0;
+        red.max(green).max(blue)
+    };
+    // Allow faint JPEG noise in a bar while rejecting bright details and dark gradients.
+    let is_padding = |&x: &u32| {
+        let (peak, sum) = (0..height)
+            .map(|y| level(x, y))
+            .fold((0, 0u64), |(peak, sum), value| {
+                (peak.max(value), sum + u64::from(value))
+            });
+        peak <= 24 && sum <= 8 * u64::from(height)
+    };
+    let left = (0..width).take_while(is_padding).count() as u32;
+    let right = (left..width).rev().take_while(is_padding).count() as u32;
+    let padding = left.min(right);
+    let content_width = width - left - right;
+    let min_edge_length = height.saturating_mul(2).div_ceil(3);
+    if padding < width.div_ceil(20)
+        || left.abs_diff(right) > width.div_ceil(50)
+        || content_width < min_edge_length
+    {
         return image;
     }
-    image.crop_imm(left, top, right - left + 1, bottom - top + 1)
+
+    // A lone label or a horizontal progress bar rarely has a tall edge on both sides.
+    let edge_width = height.div_ceil(20).min(content_width / 2);
+    let has_edge = |columns: std::ops::Range<u32>| {
+        let rows = (0..height)
+            .filter(|&y| columns.clone().any(|x| level(x, y) > 24))
+            .count() as u32;
+        rows >= min_edge_length
+    };
+    if has_edge(left..left + edge_width) && has_edge(width - right - edge_width..width - right) {
+        image.crop_imm(padding, 0, width - 2 * padding, height)
+    } else {
+        image
+    }
 }
 
 /// Fit `image` inside `size` preserving aspect ratio, with black padding.
@@ -506,7 +524,7 @@ mod tests {
                 background
             }
         });
-        let strip = StripCanvas::new(FullStrip::ImageSlot(3));
+        let strip = StripCanvas::new(FullStrip::ImageSlot(3), true);
         let frame = strip
             .update(1, Some(DynamicImage::ImageRgb8(image.clone())))
             .unwrap()
@@ -522,7 +540,7 @@ mod tests {
     #[test]
     fn panel_strip_draws_below_the_bezel() {
         let image = RgbImage::from_pixel(200, 100, Rgb([0, 0, 255]));
-        let strip = StripCanvas::new(FullStrip::PanelBgpic);
+        let strip = StripCanvas::new(FullStrip::PanelBgpic, true);
         let frame = strip
             .update(2, Some(DynamicImage::ImageRgb8(image.clone())))
             .unwrap()
@@ -547,7 +565,7 @@ mod tests {
                 Rgb([0, 0, 0])
             }
         });
-        let strip = StripCanvas::new(FullStrip::PanelBgpic);
+        let strip = StripCanvas::new(FullStrip::PanelBgpic, true);
         let frame = strip
             .update(0, Some(DynamicImage::ImageRgb8(image)))
             .unwrap()
@@ -563,8 +581,40 @@ mod tests {
     }
 
     #[test]
-    fn trim_leaves_uniform_images_alone() {
-        let image = DynamicImage::ImageRgb8(RgbImage::from_pixel(200, 100, Rgb([0, 0, 0])));
-        assert_eq!(trim_uniform_border(image).dimensions(), (200, 100));
+    fn auto_crop_preserves_progress_bar_lengths() {
+        let strip = StripCanvas::new(FullStrip::PanelBgpic, true);
+        for bar_width in [20, 80] {
+            let bar = Rgb([200, 100, 50]);
+            let image = RgbImage::from_fn(200, 100, |x, y| {
+                if (100 - bar_width / 2..100 + bar_width / 2).contains(&x) && (42..58).contains(&y)
+                {
+                    bar
+                } else {
+                    Rgb([0, 0, 0])
+                }
+            });
+            let frame = strip
+                .update(0, Some(DynamicImage::ImageRgb8(image.clone())))
+                .unwrap()
+                .into_rgb8();
+            assert_eq!(frame.view(0, 42, 200, 100).to_image(), image);
+        }
+    }
+
+    #[test]
+    fn disabling_auto_crop_preserves_side_padding() {
+        let image = RgbImage::from_fn(200, 100, |x, _| {
+            if (50..150).contains(&x) {
+                Rgb([200, 100, 50])
+            } else {
+                Rgb([0, 0, 0])
+            }
+        });
+        let strip = StripCanvas::new(FullStrip::PanelBgpic, false);
+        let frame = strip
+            .update(0, Some(DynamicImage::ImageRgb8(image.clone())))
+            .unwrap()
+            .into_rgb8();
+        assert_eq!(frame.view(0, 42, 200, 100).to_image(), image);
     }
 }
