@@ -16,6 +16,40 @@ pub const DEVICE_TYPE: u8 = 7; // StreamDeckPlus
 pub enum FullStrip {
     ImageSlot(u8),
     Bgpic,
+    /// N4 Pro-family panel: keys and strip share one 800x480 screen, and the
+    /// touch strip is its bottom 160 rows. Drawn with BGPIC at the panel's
+    /// strip area; the top rows sit behind the bezel.
+    PanelBgpic,
+}
+
+/// Size of the full-strip canvas and which of its rows can be seen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StripGeometry {
+    pub size: (usize, usize),
+    /// Rows hidden behind the bezel at the top of the canvas.
+    pub hidden_top: usize,
+}
+
+impl FullStrip {
+    pub fn geometry(&self) -> StripGeometry {
+        match self {
+            Self::ImageSlot(_) | Self::Bgpic => StripGeometry {
+                size: (800, 128),
+                hidden_top: 0,
+            },
+            // Measured on a VSDInside N4 Pro (5548:1023, V4.VSD N4 Pro.02.010):
+            // panel rows 320-479 land in the strip window, and roughly the
+            // first 24 of those are covered by the bezel.
+            Self::PanelBgpic => StripGeometry {
+                size: (800, 160),
+                hidden_top: 24,
+            },
+        }
+    }
+
+    pub fn uses_bgpic(&self) -> bool {
+        matches!(self, Self::Bgpic | Self::PanelBgpic)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -226,6 +260,10 @@ impl Kind {
     }
 
     pub fn full_strip(&self, firmware: Option<&str>, bgpic: Option<bool>) -> Option<FullStrip> {
+        // Tested on V4.VSD N4 Pro.02.010. On by default; `bgpic = false` turns it off.
+        if matches!(self, Self::VsdN4Pro) {
+            return (bgpic != Some(false)).then_some(FullStrip::PanelBgpic);
+        }
         if bgpic == Some(true) {
             return Some(FullStrip::Bgpic);
         }
@@ -277,6 +315,7 @@ mod tests {
         let n4e_slot = Some(FullStrip::ImageSlot(3));
         let s10_slot = Some(FullStrip::ImageSlot(4));
         let bgpic = Some(FullStrip::Bgpic);
+        let panel = Some(FullStrip::PanelBgpic);
         for (kind, firmware, override_bgpic, expected) in [
             (Kind::N4E, Some("V3.293N4E.01.999"), None, None),
             (Kind::N4E, Some("V3.Mbox_N4E.02.013"), None, None),
@@ -299,8 +338,10 @@ mod tests {
                 Some(true),
                 bgpic,
             ),
-            (Kind::VsdN4Pro, Some("V3.S10.02.017"), None, None),
-            (Kind::VsdN4Pro, None, Some(true), bgpic),
+            (Kind::VsdN4Pro, Some("V4.VSD N4 Pro.02.010"), None, panel),
+            (Kind::VsdN4Pro, None, Some(true), panel),
+            (Kind::VsdN4Pro, None, Some(false), None),
+            (Kind::N4Pro, None, None, None),
         ] {
             assert_eq!(
                 kind.full_strip(firmware, override_bgpic),
