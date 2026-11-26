@@ -4,7 +4,9 @@ use std::{
 };
 
 use data_url::DataUrl;
-use image::{DynamicImage, GenericImageView, RgbImage, load_from_memory_with_format};
+use image::{
+    DynamicImage, GenericImageView, RgbImage, imageops::FilterType, load_from_memory_with_format,
+};
 use mirajazz::{
     device::Device,
     error::MirajazzError,
@@ -298,7 +300,7 @@ pub async fn handle_set_image(
             // pre-fit encoder images preserving aspect ratio, so that stretch
             // becomes a no-op.
             let image = if is_encoder {
-                fit_into(image, format.size)
+                fit_into(image, format.size, FilterType::Nearest)
             } else {
                 image
             };
@@ -359,7 +361,7 @@ impl StripCanvas {
                 } else {
                     image
                 };
-                fit_into(image, (width, height)).into_rgb8()
+                fit_into(image, (width, height), FilterType::CatmullRom).into_rgb8()
             }
             None => RgbImage::new(width as u32, height as u32),
         };
@@ -486,7 +488,7 @@ fn crop_side_padding(image: DynamicImage) -> DynamicImage {
 /// whose aspect differs (e.g. OpenDeck's 200x100 dial image on the 176x112
 /// touch strip); pre-fitting here keeps shapes intact at the cost of small
 /// letterbox bars.
-fn fit_into(image: DynamicImage, size: (usize, usize)) -> DynamicImage {
+fn fit_into(image: DynamicImage, size: (usize, usize), filter: FilterType) -> DynamicImage {
     let (ws, hs) = (size.0 as u32, size.1 as u32);
     let (w, h) = image.dimensions();
     if w == ws && h == hs {
@@ -495,9 +497,7 @@ fn fit_into(image: DynamicImage, size: (usize, usize)) -> DynamicImage {
     let scale = (ws as f32 / w as f32).min(hs as f32 / h as f32);
     let nw = ((w as f32 * scale).round() as u32).clamp(1, ws);
     let nh = ((h as f32 * scale).round() as u32).clamp(1, hs);
-    let fitted = image
-        .resize_exact(nw, nh, image::imageops::FilterType::Nearest)
-        .into_rgb8();
+    let fitted = image.resize_exact(nw, nh, filter).into_rgb8();
     let mut canvas = RgbImage::new(ws, hs);
     image::imageops::replace(
         &mut canvas,
