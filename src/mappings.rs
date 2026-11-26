@@ -260,21 +260,25 @@ impl Kind {
     }
 
     pub fn full_strip(&self, firmware: Option<&str>, bgpic: Option<bool>) -> Option<FullStrip> {
-        // Tested on V4.VSD N4 Pro.02.010. On by default; `bgpic = false` turns it off.
-        if matches!(self, Self::VsdN4Pro) {
-            return (bgpic != Some(false)).then_some(FullStrip::PanelBgpic);
-        }
         if bgpic == Some(true) {
-            return Some(FullStrip::Bgpic);
+            return Some(match self {
+                Self::VsdN4Pro => FullStrip::PanelBgpic,
+                _ => FullStrip::Bgpic,
+            });
         }
-        let (minimum, index) = match self {
+        let (firmware_prefix, minimum, strip) = match self {
             // BAT wire slot 4, tested on V3.Mbox_N4E.02.014 and V3.Mbox_N4E_HJDF.02.018.
-            Self::N4E => ((2, 14), 3),
+            Self::N4E => ("V3.", (2, 14), FullStrip::ImageSlot(3)),
             // BAT wire slot 5, tested on V3.S10.02.017 by the PR #29 author.
-            Self::StreonorS10Pro => ((2, 17), 4),
+            Self::StreonorS10Pro => ("V3.", (2, 17), FullStrip::ImageSlot(4)),
+            // Panel BGPIC tested on V4.VSD N4 Pro.02.010 by the PR #31 author.
+            Self::VsdN4Pro => ("V4.", (2, 10), FullStrip::PanelBgpic),
             _ => return None,
         };
-        (strip_firmware_version(firmware?)? >= minimum).then_some(FullStrip::ImageSlot(index))
+        if bgpic == Some(false) && strip.uses_bgpic() {
+            return None;
+        }
+        (strip_firmware_version(firmware?, firmware_prefix)? >= minimum).then_some(strip)
     }
 
     pub fn supports_both_encoder_states(&self) -> bool {
@@ -290,10 +294,10 @@ impl Kind {
     }
 }
 
-fn strip_firmware_version(firmware: &str) -> Option<(u8, u16)> {
+fn strip_firmware_version(firmware: &str, prefix: &str) -> Option<(u8, u16)> {
     let (family_and_series, build) = firmware.trim_end_matches('\0').rsplit_once('.')?;
     let (family, series) = family_and_series.rsplit_once('.')?;
-    if family.strip_prefix("V3.")?.is_empty()
+    if family.strip_prefix(prefix)?.is_empty()
         || series.len() != 2
         || build.len() != 3
         || !series
@@ -338,9 +342,17 @@ mod tests {
                 Some(true),
                 bgpic,
             ),
+            (Kind::VsdN4Pro, Some("V4.VSD N4 Pro.02.009"), None, None),
             (Kind::VsdN4Pro, Some("V4.VSD N4 Pro.02.010"), None, panel),
+            (Kind::VsdN4Pro, Some("V4.VSD N4 Pro.02.011"), None, panel),
+            (Kind::VsdN4Pro, None, None, None),
             (Kind::VsdN4Pro, None, Some(true), panel),
-            (Kind::VsdN4Pro, None, Some(false), None),
+            (
+                Kind::VsdN4Pro,
+                Some("V4.VSD N4 Pro.02.010"),
+                Some(false),
+                None,
+            ),
             (Kind::N4Pro, None, None, None),
         ] {
             assert_eq!(

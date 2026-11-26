@@ -102,11 +102,11 @@ The plugin enables the full-width strip when it can read a firmware version that
 | --- | --- | --- | --- |
 | Mirabox N4E | `6603:1007` | `02.014` | `BAT` wire slot 4 |
 | Streonor S10 Pro | `1500:3007` | `02.017` | `BAT` wire slot 5 |
-| VSDInside N4 Pro | `5548:1023` | none (tested on `02.010`) | `BGPIC` 800×160, panel rows 320–479 |
+| VSDInside N4 Pro | `5548:1023` | `02.010` | `BGPIC` 800×160, panel rows 320–479 |
 
-The VSDInside N4 Pro draws its keys and touch strip on one 800×480 panel. The strip is the panel's bottom 160 rows, and about the top 24 of those sit behind the bezel, so dial images are drawn in the visible 800×136 area. This is on by default for that device; set `bgpic = false` to go back to per-dial tiles.
+The VSDInside N4 Pro draws its keys and touch strip on one 800×480 panel. The strip is the panel's bottom 160 rows, and about the top 24 of those sit behind the bezel, so dial images are drawn in the visible 800×136 area.
 
-Set `bgpic = true` at the top level of `config.toml` to try the experimental `BGPIC` renderer on any deck recognized by the plugin. Restart OpenDeck or reconnect the deck to apply the setting. Set `bgpic = false` or omit it to use image slots.
+Set `bgpic = true` at the top level of `config.toml` to try `BGPIC` on any deck recognized by the plugin, including when the firmware version is unavailable. Set `bgpic = false` to disable `BGPIC` or omit it to use the firmware rules above. Restart OpenDeck or reconnect the deck to apply the setting.
 
 #### Report a compatibility test
 
