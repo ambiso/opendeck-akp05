@@ -19,10 +19,12 @@ use watcher::watcher_task;
 #[cfg(not(target_os = "windows"))]
 use tokio::signal::unix::{SignalKind, signal};
 
+mod actions;
 mod config;
 mod device;
 mod inputs;
 mod led_config;
+mod led_control;
 mod managed_device;
 mod mappings;
 mod watcher;
@@ -112,6 +114,8 @@ async fn shutdown() {
 
 async fn connect() -> OpenActionResult<()> {
     set_global_event_handler(&*HANDLER);
+    openaction::register_action(actions::SetLedColor).await;
+    openaction::register_action(actions::LedBrightness).await;
     openaction::run(std::env::args().collect()).await
 }
 

@@ -14,6 +14,25 @@
     { "Platform": "mac", "MinimumVersion": "11.3" },
     { "Platform": "windows", "MinimumVersion": "10" }
   ],
-  "Actions": [],
+  "Actions": [
+    {
+      "Name": "Knob LED Color",
+      "UUID": "com.github.ambiso.opendeck-akp05.ledcolor",
+      "Icon": "assets/icon",
+      "Tooltip": "Set the knob LED color",
+      "Controllers": ["Keypad"],
+      "PropertyInspectorPath": "pi/led.html",
+      "States": [{ "Image": "assets/icon" }]
+    },
+    {
+      "Name": "Knob LED Brightness",
+      "UUID": "com.github.ambiso.opendeck-akp05.ledbrightness",
+      "Icon": "assets/icon",
+      "Tooltip": "Turn to change the knob LED brightness",
+      "Controllers": ["Encoder"],
+      "PropertyInspectorPath": "pi/led.html",
+      "States": [{ "Image": "assets/icon" }]
+    }
+  ],
   "DeviceNamespace": "n4"
 }
