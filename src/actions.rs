@@ -57,8 +57,8 @@ impl Action for LedBrightness {
     type Settings = BrightnessSettings;
 
     async fn will_appear(&self, i: &Instance, _s: &Self::Settings) -> OpenActionResult<()> {
-        let b = led_control::brightness().await;
-        i.set_title(Some(format!("{b}%")), None).await
+        led_control::brightness().await;
+        show_gauge(i).await
     }
 
     async fn dial_rotate(
@@ -68,7 +68,43 @@ impl Action for LedBrightness {
         ticks: i16,
         _pressed: bool,
     ) -> OpenActionResult<()> {
-        let b = led_control::change_brightness(ticks * s.step.max(1) as i16).await;
-        i.set_title(Some(format!("{b}%")), None).await
+        led_control::change_brightness(ticks * s.step.max(1) as i16).await;
+        show_gauge(i).await
     }
+
+    async fn dial_down(&self, i: &Instance, _s: &Self::Settings) -> OpenActionResult<()> {
+        led_control::toggle_mute().await;
+        show_gauge(i).await
+    }
+}
+
+fn gauge_svg(pct: u8, color: [u8; 3]) -> String {
+    let fill = pct as u32 * 160 / 100;
+    format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='200' height='100' viewBox='0 0 200 100'>\
+         <rect width='200' height='100' fill='#111'/>\
+         <text x='100' y='52' font-family='sans-serif' font-size='38' font-weight='bold' \
+         fill='white' text-anchor='middle'>{pct}%</text>\
+         <rect x='20' y='68' width='160' height='12' rx='6' fill='#333'/>\
+         <rect x='20' y='68' width='{fill}' height='12' rx='6' fill='rgb({},{},{})'/>\
+         </svg>",
+        color[0], color[1], color[2]
+    )
+}
+
+fn svg_data_url(svg: &str) -> String {
+    let mut out = String::from("data:image/svg+xml;charset=utf8,");
+    for b in svg.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+async fn show_gauge(i: &Instance) -> OpenActionResult<()> {
+    let (pct, color) = led_control::state().await;
+    i.set_image(Some(svg_data_url(&gauge_svg(pct, color))), None).await
 }
