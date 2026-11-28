@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 12px;
+            color: #ddd;
+            background: #2d2d2d
+        }
+
+        input {
+            margin-left: 8px
+        }
+    </style>
+</head>
+
+<body>
+    <div id="colorRow"><label>Color <input type="color" id="c" value="#ffffff"></label></div>
+    <div id="stepRow"><label>Step per tick <input type="number" id="s" min="1" max="25" value="5"></label></div>
+    <script>
+        let ws, ctx, settings = {};
+        const c = document.getElementById('c'), s = document.getElementById('s');
+        function connectElgatoStreamDeckSocket(port, uuid, registerEvent, info, actionInfo) {
+            ctx = uuid;
+            const ai = JSON.parse(actionInfo);
+            settings = (ai.payload && ai.payload.settings) || {};
+            const isColor = ai.action.endsWith('ledcolor');
+            document.getElementById('colorRow').style.display = isColor ? 'block' : 'none';
+            document.getElementById('stepRow').style.display = isColor ? 'none' : 'block';
+            if (settings.color) c.value = settings.color;
+            if (settings.step) s.value = settings.step;
+            ws = new WebSocket('ws://127.0.0.1:' + port);
+            ws.onopen = () => ws.send(JSON.stringify({event: registerEvent, uuid}));
+        }
+        function save() {
+            settings.color = c.value;
+            settings.step = parseInt(s.value) || 5;
+            ws.send(JSON.stringify({event: 'setSettings', context: ctx, payload: settings}));
+        }
+        c.oninput = save; s.oninput = save;
+    </script>
+</body>
+
+</html>
