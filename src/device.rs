@@ -17,7 +17,7 @@ use tokio::time::{interval, timeout};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    DEVICES, config, led_config,
+    DEVICES, config, led_control,
     managed_device::ManagedDevice,
     mappings::{
         COL_COUNT, CandidateDevice, DEVICE_TYPE, ENCODER_COUNT, FullStrip, KEY_COUNT, Kind,
@@ -58,10 +58,7 @@ pub async fn device_task(candidate: CandidateDevice, token: CancellationToken) {
         clear_display(&device, strip.as_ref()).await?;
 
         log::info!("Applying config: {:?}", cfg);
-        if let Some(led_config::LedMode::Static { colors }) = cfg.leds.mode {
-            device.set_led_brightness(cfg.leds.brightness).await?;
-            device.set_led_colors(&colors).await?;
-        }
+        led_control::apply_to_device(&device).await?;
 
         if let Some(enabled) = cfg.vibration {
             if candidate.kind.supports_vibration() {
